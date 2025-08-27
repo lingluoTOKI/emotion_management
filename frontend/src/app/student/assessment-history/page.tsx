@@ -16,7 +16,10 @@ import {
   Heart,
   AlertTriangle,
   CheckCircle,
-  Clock
+  Clock,
+  Smile,
+  Frown,
+  Meh
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import DashboardLayout from '@/components/DashboardLayout'
@@ -33,6 +36,9 @@ interface AssessmentRecord {
   summary: string
   recommendations: string[]
   emotionTrend: 'improving' | 'stable' | 'declining'
+  emotionStatus: 'positive' | 'neutral' | 'negative'
+  keywords: string[]
+  depressionIndex: number
 }
 
 // 模拟数据
@@ -47,7 +53,10 @@ const mockAssessmentHistory: AssessmentRecord[] = [
     status: 'completed',
     summary: '中度焦虑情绪，主要与学习压力相关',
     recommendations: ['保持规律作息', '增加运动', '寻求社会支持'],
-    emotionTrend: 'improving'
+    emotionTrend: 'improving',
+    emotionStatus: 'neutral',
+    keywords: ['学习压力', '焦虑', '注意力不集中'],
+    depressionIndex: 65
   },
   {
     id: '2',
@@ -59,7 +68,10 @@ const mockAssessmentHistory: AssessmentRecord[] = [
     status: 'completed',
     summary: '轻度抑郁症状，人际关系困扰',
     recommendations: ['改善睡眠质量', '练习放松技巧', '考虑专业咨询'],
-    emotionTrend: 'stable'
+    emotionTrend: 'stable',
+    emotionStatus: 'neutral',
+    keywords: ['人际关系', '失眠', '情绪低落'],
+    depressionIndex: 72
   },
   {
     id: '3',
@@ -71,7 +83,10 @@ const mockAssessmentHistory: AssessmentRecord[] = [
     status: 'completed',
     summary: '中重度抑郁症状，需要专业关注',
     recommendations: ['立即寻求专业帮助', '告知信任的人', '避免独处'],
-    emotionTrend: 'declining'
+    emotionTrend: 'declining',
+    emotionStatus: 'negative',
+    keywords: ['抑郁', '自我否定', '社交回避'],
+    depressionIndex: 85
   },
   {
     id: '4',
@@ -83,9 +98,229 @@ const mockAssessmentHistory: AssessmentRecord[] = [
     status: 'completed',
     summary: '轻度焦虑，整体状态良好',
     recommendations: ['保持现有生活节奏', '适量运动', '定期自我检查'],
-    emotionTrend: 'improving'
+    emotionTrend: 'improving',
+    emotionStatus: 'positive',
+    keywords: ['状态良好', '轻度焦虑', '适应良好'],
+    depressionIndex: 42
+  },
+  {
+    id: '5',
+    date: '2024-07-25',
+    type: 'ai-assessment',
+    score: 75,
+    maxScore: 100,
+    riskLevel: 'medium',
+    status: 'completed',
+    summary: '情绪波动较大，需要关注',
+    recommendations: ['保持规律生活', '记录情绪变化', '寻求支持'],
+    emotionTrend: 'stable',
+    emotionStatus: 'neutral',
+    keywords: ['情绪波动', '压力', '适应困难'],
+    depressionIndex: 68
+  },
+  {
+    id: '6',
+    date: '2024-07-18',
+    type: 'comprehensive',
+    score: 62,
+    maxScore: 100,
+    riskLevel: 'medium',
+    status: 'completed',
+    summary: '整体状态平稳，偶有焦虑',
+    recommendations: ['继续当前策略', '定期评估', '保持社交'],
+    emotionTrend: 'improving',
+    emotionStatus: 'neutral',
+    keywords: ['状态平稳', '偶发焦虑', '社交良好'],
+    depressionIndex: 58
   }
 ]
+
+// 改进的折线图组件
+const DepressionChart = ({ data }: { data: AssessmentRecord[] }) => {
+  // 按日期排序数据
+  const sortedData = [...data].sort((a, b) => 
+    new Date(a.date).getTime() - new Date(b.date).getTime()
+  )
+  
+  const depressionValues = sortedData.map(d => d.depressionIndex)
+  const maxDepression = Math.max(...depressionValues)
+  const minDepression = Math.min(...depressionValues)
+  const chartHeight = 200
+  const chartWidth = Math.max(600, sortedData.length * 100)
+  const padding = { top: 20, right: 30, bottom: 40, left: 50 }
+  
+  // 计算Y轴刻度
+  const yTicks = [minDepression, Math.round((maxDepression + minDepression) / 2), maxDepression]
+  
+  // 计算数据点在图表中的位置
+  const getPointPosition = (index: number, value: number) => {
+    const x = padding.left + (index * (chartWidth - padding.left - padding.right)) / (sortedData.length - 1)
+    const y = padding.top + chartHeight - padding.bottom - ((value - minDepression) / (maxDepression - minDepression)) * (chartHeight - padding.top - padding.bottom)
+    return { x, y }
+  }
+  
+  // 生成折线路径
+  const pathData = sortedData.map((d, i) => {
+    const { x, y } = getPointPosition(i, d.depressionIndex)
+    return `${i === 0 ? 'M' : 'L'} ${x},${y}`
+  }).join(' ')
+
+  return (
+    <div className="bg-white p-6 rounded-xl shadow-sm border mt-6">
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="font-semibold text-gray-900 flex items-center">
+          <TrendingUp className="w-5 h-5 mr-2 text-blue-600" />
+          抑郁指数趋势图
+        </h3>
+        <div className="text-sm text-gray-500">
+          时间范围: {sortedData[0]?.date} 至 {sortedData[sortedData.length - 1]?.date}
+        </div>
+      </div>
+      
+      <div className="relative" style={{ height: chartHeight + padding.top + padding.bottom }}>
+        <svg 
+          width="100%" 
+          height={chartHeight + padding.top + padding.bottom}
+          viewBox={`0 0 ${chartWidth} ${chartHeight + padding.top + padding.bottom}`}
+          className="w-full"
+        >
+          {/* Y轴网格线 */}
+          {yTicks.map((tick, i) => {
+            const y = padding.top + chartHeight - padding.bottom - ((tick - minDepression) / (maxDepression - minDepression)) * (chartHeight - padding.top - padding.bottom)
+            return (
+              <g key={i}>
+                <line
+                  x1={padding.left}
+                  y1={y}
+                  x2={chartWidth - padding.right}
+                  y2={y}
+                  stroke="#e5e7eb"
+                  strokeWidth="1"
+                  strokeDasharray="4 4"
+                />
+                <text
+                  x={padding.left - 10}
+                  y={y + 4}
+                  textAnchor="end"
+                  className="text-xs fill-gray-500"
+                >
+                  {tick}
+                </text>
+              </g>
+            )
+          })}
+          
+          {/* X轴网格线 (日期) */}
+          {sortedData.map((d, i) => {
+            const { x } = getPointPosition(i, minDepression)
+            return (
+              <line
+                key={i}
+                x1={x}
+                y1={padding.top}
+                x2={x}
+                y2={chartHeight - padding.bottom + padding.top}
+                stroke="#e5e7eb"
+                strokeWidth="1"
+                strokeDasharray="4 4"
+              />
+            )
+          })}
+          
+          {/* 折线 */}
+          <path
+            d={pathData}
+            fill="none"
+            stroke="#3b82f6"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          
+          {/* 数据点 */}
+          {sortedData.map((d, i) => {
+            const { x, y } = getPointPosition(i, d.depressionIndex)
+            const riskColor = 
+              d.depressionIndex >= 70 ? '#ef4444' : 
+              d.depressionIndex >= 50 ? '#f59e0b' : 
+              '#10b981'
+            
+            return (
+              <g key={d.id}>
+                <circle
+                  cx={x}
+                  cy={y}
+                  r="6"
+                  fill={riskColor}
+                  stroke="#fff"
+                  strokeWidth="2"
+                  className="cursor-pointer transition-all hover:r-8"
+                />
+                <title>
+                  {d.date}: 抑郁指数 {d.depressionIndex} ({d.riskLevel === 'high' ? '高风险' : d.riskLevel === 'medium' ? '中等风险' : '低风险'})
+                </title>
+              </g>
+            )
+          })}
+          
+          {/* X轴日期标签 */}
+          {sortedData.map((d, i) => {
+            const { x } = getPointPosition(i, minDepression)
+            return (
+              <text
+                key={d.id}
+                x={x}
+                y={chartHeight + padding.top + 20}
+                textAnchor="middle"
+                className="text-xs fill-gray-500"
+              >
+                {d.date.split('-').slice(1).join('/')}
+              </text>
+            )
+          })}
+          
+          {/* Y轴标签 */}
+          <text
+            x={-chartHeight / 2}
+            y="15"
+            transform="rotate(-90)"
+            textAnchor="middle"
+            className="text-sm fill-gray-700 font-medium"
+          >
+            抑郁指数
+          </text>
+          
+          {/* X轴标签 */}
+          <text
+            x={chartWidth / 2}
+            y={chartHeight + padding.top + 35}
+            textAnchor="middle"
+            className="text-sm fill-gray-700 font-medium"
+          >
+            评估日期
+          </text>
+        </svg>
+        
+        {/* 风险区域指示 */}
+        <div className="absolute right-6 top-6 bg-white p-3 rounded-lg shadow-sm border text-sm">
+          <div className="font-medium mb-2">风险区间</div>
+          <div className="flex items-center mb-1">
+            <div className="w-3 h-3 bg-green-500 rounded mr-2"></div>
+            <span>0-49: 低风险</span>
+          </div>
+          <div className="flex items-center mb-1">
+            <div className="w-3 h-3 bg-yellow-500 rounded mr-2"></div>
+            <span>50-69: 中等风险</span>
+          </div>
+          <div className="flex items-center">
+            <div className="w-3 h-3 bg-red-500 rounded mr-2"></div>
+            <span>70-100: 高风险</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function AssessmentHistory() {
   const [assessments, setAssessments] = useState<AssessmentRecord[]>(mockAssessmentHistory)
@@ -113,7 +348,8 @@ export default function AssessmentHistory() {
     if (searchTerm) {
       filtered = filtered.filter(assessment => 
         assessment.summary.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        assessment.recommendations.some(rec => rec.toLowerCase().includes(searchTerm.toLowerCase()))
+        assessment.recommendations.some(rec => rec.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        assessment.keywords.some(kw => kw.toLowerCase().includes(searchTerm.toLowerCase()))
       )
     }
 
@@ -130,7 +366,15 @@ export default function AssessmentHistory() {
     const trend = lastScore > previousScore ? 'improving' : 
                  lastScore < previousScore ? 'declining' : 'stable'
     
-    return { avgScore: avgScore.toFixed(1), trend, lastScore }
+    // 获取最新情绪状态
+    const latestEmotion = assessments[0]?.emotionStatus || 'neutral'
+    
+    return { 
+      avgScore: avgScore.toFixed(1), 
+      trend, 
+      lastScore,
+      emotionStatus: latestEmotion
+    }
   }
 
   const trends = calculateTrends()
@@ -163,6 +407,22 @@ export default function AssessmentHistory() {
     }
   }
 
+  const getEmotionIcon = (status: string) => {
+    switch (status) {
+      case 'positive': return <Smile className="w-6 h-6 text-green-600" />
+      case 'negative': return <Frown className="w-6 h-6 text-red-600" />
+      default: return <Meh className="w-6 h-6 text-yellow-600" />
+    }
+  }
+
+  const getEmotionLabel = (status: string) => {
+    switch (status) {
+      case 'positive': return '情绪积极'
+      case 'negative': return '情绪低落'
+      default: return '情绪平稳'
+    }
+  }
+
   const exportData = () => {
     const data = {
       exported_at: new Date().toISOString(),
@@ -186,7 +446,7 @@ export default function AssessmentHistory() {
       <DashboardLayout title="评估历史">
         <div className="space-y-6">
           {/* 概览统计 */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
             <div className="bg-white rounded-xl shadow-sm border p-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -235,7 +495,20 @@ export default function AssessmentHistory() {
                 )}
               </div>
             </div>
+            
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">当前情绪</p>
+                  <p className="text-sm font-semibold">{getEmotionLabel(trends.emotionStatus)}</p>
+                </div>
+                {getEmotionIcon(trends.emotionStatus)}
+              </div>
+            </div>
           </div>
+
+          {/* 抑郁指数图表 */}
+          <DepressionChart data={assessments} />
 
           {/* 筛选和搜索 */}
           <div className="bg-white rounded-2xl shadow-sm border p-6">
@@ -281,7 +554,7 @@ export default function AssessmentHistory() {
               >
                 <option value="all">所有风险等级</option>
                 <option value="low">低风险</option>
-                <option value="medium">中等风险</option>
+                <option value='medium'>中等风险</option>
                 <option value="high">高风险</option>
               </select>
               
@@ -342,6 +615,15 @@ export default function AssessmentHistory() {
                     </div>
 
                     <p className="text-gray-700 mb-4">{assessment.summary}</p>
+                    
+                    {/* 关键词标签 */}
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {assessment.keywords.map((keyword, index) => (
+                        <span key={index} className="px-2 py-1 bg-gray-100 text-gray-700 text-sm rounded-md">
+                          #{keyword}
+                        </span>
+                      ))}
+                    </div>
 
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-4">
@@ -362,6 +644,11 @@ export default function AssessmentHistory() {
                               <span className="text-blue-600">保持稳定</span>
                             </>
                           )}
+                        </div>
+                        
+                        <div className="flex items-center space-x-1 text-sm">
+                          {getEmotionIcon(assessment.emotionStatus)}
+                          <span>{getEmotionLabel(assessment.emotionStatus)}</span>
                         </div>
                       </div>
                       

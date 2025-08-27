@@ -50,8 +50,6 @@ emotion_management/
 │           └── counselor/              # 咨询师页面
 ├── database/                           # 数据库相关
 │   └── init.sql                        # 数据库初始化脚本
-├── ai_models/                          # AI模型相关代码
-├── docs/                               # 项目文档
 └── scripts/                            # 部署和工具脚本
     ├── start.sh                        # Linux/Mac启动脚本
     └── start.bat                       # Windows启动脚本

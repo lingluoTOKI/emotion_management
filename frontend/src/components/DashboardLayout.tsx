@@ -9,7 +9,7 @@ import { useState, useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
-  Menu, X, LogOut, Bell, Search, User, Settings,
+  Menu, X, LogOut, Search, User, Settings,
   ChevronRight, Home, ChevronDown, ChevronUp
 } from 'lucide-react'
 import { getUserInfo, logout } from '@/lib/auth'
@@ -26,7 +26,6 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
   const [user, setUser] = useState<UserInfo | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [expandedItems, setExpandedItems] = useState<string[]>([])
-  const [notifications, setNotifications] = useState(3) // 示例通知数量
   
   const router = useRouter()
   const pathname = usePathname()
@@ -74,6 +73,15 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
     }
   }
 
+  // 检查菜单项是否激活（包括子菜单）
+  const isItemActive = (item: NavigationItem): boolean => {
+    if (pathname === item.href) return true
+    if (item.children) {
+      return item.children.some(child => pathname === child.href)
+    }
+    return false
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* 侧边栏 */}
@@ -96,14 +104,15 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
               exit={{ x: -300 }}
               className="fixed left-0 top-0 h-full w-64 bg-white shadow-xl z-50 lg:hidden"
             >
-              <SidebarContent 
-                navigation={navigation}
-                expandedItems={expandedItems}
-                pathname={pathname}
-                user={user}
-                onNavigate={navigateToItem}
-                onClose={() => setSidebarOpen(false)}
-              />
+            <SidebarContent 
+              navigation={navigation}
+              expandedItems={expandedItems}
+              pathname={pathname}
+              user={user}
+              onNavigate={navigateToItem}
+              onClose={() => setSidebarOpen(false)}
+              isItemActive={isItemActive}
+            />
             </motion.div>
           </>
         )}
@@ -117,6 +126,7 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
           pathname={pathname}
           user={user}
           onNavigate={navigateToItem}
+          isItemActive={isItemActive}
         />
       </div>
 
@@ -154,18 +164,8 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
                 </nav>
               </div>
 
-              {/* 右侧：通知和用户菜单 */}
+              {/* 右侧：用户菜单 */}
               <div className="flex items-center space-x-4">
-                {/* 通知 */}
-                <button className="relative p-2 text-gray-600 hover:bg-gray-100 rounded-md">
-                  <Bell className="w-6 h-6" />
-                  {notifications > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                      {notifications}
-                    </span>
-                  )}
-                </button>
-
                 {/* 用户菜单 */}
                 <div className="flex items-center space-x-3">
                   <div className="hidden sm:block text-right">
@@ -213,7 +213,8 @@ function SidebarContent({
   pathname, 
   user, 
   onNavigate, 
-  onClose 
+  onClose,
+  isItemActive
 }: {
   navigation: NavigationItem[]
   expandedItems: string[]
@@ -221,6 +222,7 @@ function SidebarContent({
   user: UserInfo | null
   onNavigate: (item: NavigationItem) => void
   onClose?: () => void
+  isItemActive: (item: NavigationItem) => boolean
 }) {
   return (
     <div className="flex flex-col h-full">
@@ -250,7 +252,7 @@ function SidebarContent({
             key={item.label}
             item={item}
             isExpanded={expandedItems.includes(item.label)}
-            isActive={pathname === item.href || pathname.startsWith(item.href + '/')}
+            isActive={isItemActive(item)}
             onClick={() => onNavigate(item)}
           />
         ))}
@@ -291,6 +293,12 @@ function NavigationItemComponent({
   onClick: () => void
 }) {
   const hasChildren = item.children && item.children.length > 0
+  const router = useRouter()
+  const pathname = usePathname()
+
+  const handleChildClick = (href: string) => {
+    router.push(href)
+  }
 
   return (
     <div>
@@ -321,9 +329,9 @@ function NavigationItemComponent({
             {item.children!.map((child) => (
               <button
                 key={child.href}
-                onClick={() => window.location.href = child.href}
+                onClick={() => handleChildClick(child.href)}
                 className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                  window.location.pathname === child.href
+                  pathname === child.href
                     ? 'bg-blue-50 text-blue-700'
                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`}

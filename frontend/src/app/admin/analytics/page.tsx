@@ -12,7 +12,8 @@ import {
   ArrowLeft,
   Download,
   RefreshCw,
-  Filter
+  Filter,
+  Loader2
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import DashboardLayout from '@/components/DashboardLayout'
@@ -71,13 +72,25 @@ export default function AdminAnalytics() {
   const [selectedTimeRange, setSelectedTimeRange] = useState('month')
   const [isLoading, setIsLoading] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(new Date())
+  const [chartLoading, setChartLoading] = useState(true)
   const router = useRouter()
+
+  // 模拟数据加载
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setChartLoading(false);
+    }, 800);
+    
+    return () => clearTimeout(timer);
+  }, []);
 
   const refreshData = async () => {
     setIsLoading(true)
+    setChartLoading(true);
     // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, 1500))
     setLastUpdated(new Date())
+    setChartLoading(false);
     setIsLoading(false)
   }
 
@@ -211,7 +224,11 @@ export default function AdminAnalytics() {
               description="不同心理咨询流派的咨询次数统计"
               icon={PieChart}
             >
-              <RoseChart data={mockData.therapyTypes} />
+              {chartLoading ? (
+                <ChartLoader />
+              ) : (
+                <RoseChart data={mockData.therapyTypes} />
+              )}
             </ChartCard>
           </div>
 
@@ -266,7 +283,7 @@ export default function AdminAnalytics() {
 // 指标卡片组件
 function MetricCard({ title, value, change, changeType, icon: Icon, color }: any) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border p-6">
+    <div className="bg-white rounded-xl shadow-sm border p-6 transform transition-all duration-300 hover:shadow-md hover:-translate-y-1">
       <div className="flex items-center justify-between mb-4">
         <div className={`w-10 h-10 rounded-lg flex items-center justify-center
           ${color === 'blue' ? 'bg-blue-100' :
@@ -295,7 +312,7 @@ function MetricCard({ title, value, change, changeType, icon: Icon, color }: any
 // 图表卡片组件
 function ChartCard({ title, description, icon: Icon, children }: any) {
   return (
-    <div className="bg-white rounded-2xl shadow-sm border p-6">
+    <div className="bg-white rounded-2xl shadow-sm border p-6 transform transition-all duration-300 hover:shadow-md">
       <div className="flex items-center space-x-3 mb-6">
         <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
           <Icon className="w-5 h-5 text-gray-600" />
@@ -308,6 +325,18 @@ function ChartCard({ title, description, icon: Icon, children }: any) {
       {children}
     </div>
   )
+}
+
+// 图表加载状态组件
+function ChartLoader() {
+  return (
+    <div className="flex h-64 items-center justify-center">
+      <div className="flex flex-col items-center">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <p className="text-sm text-gray-500 mt-2">加载数据中...</p>
+      </div>
+    </div>
+  );
 }
 
 // 词云图组件（简化版）
@@ -345,51 +374,104 @@ function WordCloudChart({ data }: { data: any[] }) {
   )
 }
 
-// 南丁格尔玫瑰图组件（简化版）
+// 南丁格尔玫瑰图组件（增强版）
 function RoseChart({ data }: { data: any[] }) {
-  const total = data.reduce((sum, item) => sum + item.value, 0)
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  const maxValue = Math.max(...data.map(item => item.value));
   
   return (
-    <div className="h-64 flex items-center justify-center">
-      <div className="relative w-48 h-48">
+    <div className="h-64 flex flex-col md:flex-row items-center justify-center p-2">
+      <div className="relative w-full max-w-[200px] h-[200px] mb-4 md:mb-0 md:mr-4">
         <svg viewBox="0 0 200 200" className="w-full h-full">
+          {/* 绘制网格线 */}
+          {[0.25, 0.5, 0.75, 1].map((percent, i) => {
+            const radius = 70 * percent;
+            return (
+              <circle 
+                key={i}
+                cx="100" 
+                cy="100" 
+                r={radius} 
+                fill="none" 
+                stroke="#f0f0f0" 
+                strokeWidth="1" 
+              />
+            );
+          })}
+          
+          {/* 绘制玫瑰图扇形 */}
           {data.map((item, index) => {
-            const percentage = (item.value / total) * 100
-            const startAngle = data.slice(0, index).reduce((sum, prev) => sum + (prev.value / total) * 360, 0)
-            const endAngle = startAngle + (item.value / total) * 360
+            const normalizedValue = item.value / maxValue;
+            const radius = 70 * normalizedValue; // 基于最大值归一化半径
+            const percentage = (item.value / total) * 100;
+            const angleStep = 360 / data.length;
+            const startAngle = index * angleStep;
+            const endAngle = startAngle + angleStep;
             
-            const x1 = 100 + 70 * Math.cos((startAngle - 90) * Math.PI / 180)
-            const y1 = 100 + 70 * Math.sin((startAngle - 90) * Math.PI / 180)
-            const x2 = 100 + 70 * Math.cos((endAngle - 90) * Math.PI / 180)
-            const y2 = 100 + 70 * Math.sin((endAngle - 90) * Math.PI / 180)
+            // 计算扇形路径点
+            const x1 = 100 + radius * Math.cos((startAngle - 90) * Math.PI / 180);
+            const y1 = 100 + radius * Math.sin((startAngle - 90) * Math.PI / 180);
+            const x2 = 100 + radius * Math.cos((endAngle - 90) * Math.PI / 180);
+            const y2 = 100 + radius * Math.sin((endAngle - 90) * Math.PI / 180);
             
-            const largeArcFlag = endAngle - startAngle > 180 ? 1 : 0
+            const largeArcFlag = endAngle - startAngle > 180 ? 1 : 0;
             
             return (
-              <g key={index}>
-                <path
-                  d={`M 100 100 L ${x1} ${y1} A 70 70 0 ${largeArcFlag} 1 ${x2} ${y2} Z`}
+              <motion.g key={index}>
+                <motion.path
+                  d={`M 100 100 L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2} Z`}
                   fill={item.color}
                   opacity={0.8}
-                  className="hover:opacity-100 transition-opacity cursor-pointer"
+                  className="hover:opacity-100 transition-all cursor-pointer"
+                  initial={{ opacity: 0, pathLength: 0 }}
+                  animate={{ opacity: 0.8, pathLength: 1 }}
+                  transition={{ 
+                    delay: index * 0.1,
+                    duration: 1,
+                    ease: "easeInOut"
+                  }}
+                  whileHover={{ 
+                    opacity: 1,
+                    filter: "brightness(1.1)"
+                  }}
                 >
                   <title>{item.name}: {item.value}次 ({percentage.toFixed(1)}%)</title>
-                </path>
-              </g>
-            )
+                </motion.path>
+              </motion.g>
+            );
           })}
+          
+          {/* 中心圆 */}
+          <circle cx="100" cy="100" r="20" fill="white" />
+          
+          {/* 中心文本 */}
+          <text x="100" y="95" textAnchor="middle" fontSize="12" fill="#666">咨询</text>
+          <text x="100" y="110" textAnchor="middle" fontSize="12" fill="#666">分布</text>
         </svg>
       </div>
-      <div className="ml-6 space-y-2">
+      
+      {/* 图例 */}
+      <div className="w-full md:w-auto overflow-y-auto max-h-[180px] md:max-h-none pr-2">
         {data.map((item, index) => (
-          <div key={index} className="flex items-center space-x-2 text-sm">
+          <motion.div 
+            key={index}
+            initial={{ opacity: 0, x: 10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ 
+              delay: index * 0.05,
+              duration: 0.3
+            }}
+            className="flex items-center space-x-2 py-1 text-sm"
+          >
             <div 
-              className="w-3 h-3 rounded-full"
+              className="w-3 h-3 rounded-full transition-transform hover:scale-150"
               style={{ backgroundColor: item.color }}
             />
             <span className="text-gray-700">{item.name}</span>
-            <span className="text-gray-500">({item.value})</span>
-          </div>
+            <span className="text-gray-500 ml-auto">
+              {item.value}次 ({((item.value / total) * 100).toFixed(1)}%)
+            </span>
+          </motion.div>
         ))}
       </div>
     </div>

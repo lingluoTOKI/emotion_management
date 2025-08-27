@@ -13,9 +13,10 @@ import {
   RefreshCw
 } from 'lucide-react'
 import DashboardLayout from '@/components/DashboardLayout'
-import { RequireAuth } from '@/components/AuthGuard'
+import { RequireRole } from '@/components/AuthGuard'
 import { getUserInfo } from '@/lib/auth'
 import type { UserInfo } from '@/lib/auth'
+import { api, type AIStartSessionResponse, type AIChatResponse } from '@/lib'
 
 interface Message {
   id: string
@@ -31,6 +32,7 @@ export default function AIChatPage() {
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -175,6 +177,16 @@ export default function AIChatPage() {
     return generalResponses[Math.floor(Math.random() * generalResponses.length)]
   }
 
+  const unwrap = async <T,>(resp: Response): Promise<T> => {
+    const json = await resp.json().catch(() => ({}))
+    // 兼容 ResponseHandler.success 的 { code, data, message }
+    if (json && typeof json === 'object') {
+      if (json.data) return json.data as T
+      return json as T
+    }
+    return json as T
+  }
+
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || isLoading) return
 
@@ -191,31 +203,25 @@ export default function AIChatPage() {
     setIsTyping(true)
 
     try {
-      // 调用后端AI咨询服务
-      console.log('🔍 调试信息:', {
-        userInfo: userInfo,
-        hasToken: !!userInfo?.access_token,
-        username: userInfo?.username
-      })
-      
-      const response = await fetch('http://localhost:8000/api/ai/session/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${userInfo?.access_token || ''}`
-        },
-        body: JSON.stringify({
-          message: userMessage.content,
-          session_id: `session_${userInfo?.username || 'anonymous'}_${Date.now()}`
-        })
-      })
+      // 确保会话存在
+      let currentSessionId = sessionId
+      if (!currentSessionId) {
+        const startResp = await api.ai.startSession({ problem_type: null, initial_message: null })
+        if (startResp.status === 401) throw new Error('unauthorized')
+        if (!startResp.ok) throw new Error(`start session failed: ${startResp.status}`)
+        const startData = await unwrap<AIStartSessionResponse>(startResp)
+        currentSessionId = (startData as any)?.session_id || startData?.session_id
+        if (!currentSessionId) throw new Error('no session_id returned')
+        setSessionId(currentSessionId)
+      }
 
-      console.log('🌐 API响应状态:', response.status, response.statusText)
+      // 发送对话
+      const chatResp = await api.ai.chat({ session_id: currentSessionId, message: userMessage.content })
+      if (chatResp.status === 401) throw new Error('unauthorized')
 
-      if (response.ok) {
-        const data = await response.json()
-        console.log('✅ API成功响应:', data)
-        const aiContent = data.data?.ai_response || data.ai_response || '我收到了您的消息，让我来帮助您。'
+      if (chatResp.ok) {
+        const data = await unwrap<AIChatResponse>(chatResp)
+        const aiText = (data as any)?.message || (data as any)?.ai_response || '我收到了您的消息，让我来帮助您。'
         
         // 模拟打字效果
         setTimeout(() => {
@@ -223,29 +229,15 @@ export default function AIChatPage() {
           const aiMessage: Message = {
             id: (Date.now() + 1).toString(),
             type: 'ai',
-            content: aiContent,
+            content: aiText,
             timestamp: new Date()
           }
           setMessages(prev => [...prev, aiMessage])
-        }, 1500)
-      } else if (response.status === 401) {
-        // 认证失败，使用本地智能回复
-        console.log('❌ 认证失败(401)，使用本地AI回复')
-        const localResponse = generateLocalAIResponse(userMessage.content)
-        setTimeout(() => {
-          setIsTyping(false)
-          const aiMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            type: 'ai',
-            content: `[本地AI] ${localResponse}`,
-            timestamp: new Date()
-          }
-          setMessages(prev => [...prev, aiMessage])
-        }, 1500)
+        }, 800)
       } else {
-        // 其他错误，使用本地智能回复
-        const errorText = await response.text()
-        console.log(`❌ API错误(${response.status}):`, errorText)
+        // 其他错误，降级本地回复
+        const errorText = await chatResp.text().catch(() => '')
+        console.log(`❌ API错误(${chatResp.status}):`, errorText)
         const localResponse = generateLocalAIResponse(userMessage.content)
         setTimeout(() => {
           setIsTyping(false)
@@ -256,13 +248,13 @@ export default function AIChatPage() {
             timestamp: new Date()
           }
           setMessages(prev => [...prev, aiMessage])
-        }, 1500)
+        }, 800)
       }
-    } catch (error) {
-      console.error('🚨 AI聊天网络错误:', error)
+    } catch (error: any) {
+      console.error('🚨 AI聊天错误:', error)
       setIsTyping(false)
       
-      // 使用本地智能回复作为备选方案
+      // 未认证或网络问题，使用本地智能回复
       const localResponse = generateLocalAIResponse(userMessage.content)
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -292,10 +284,11 @@ export default function AIChatPage() {
         timestamp: new Date()
       }
     ])
+    setSessionId(null)
   }
 
   return (
-    <RequireAuth>
+    <RequireRole role="student">
       <DashboardLayout title="AI心理健康助手">
         <div className="max-w-4xl mx-auto">
           <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
@@ -308,7 +301,7 @@ export default function AIChatPage() {
                   </div>
                   <div>
                     <h2 className="text-xl font-bold">AI心理健康助手</h2>
-                    <p className="text-purple-100">24/7 在线支持 • 安全私密</p>
+                    <p className="text-purple-100">{sessionId ? `会话ID：${sessionId}` : '新会话未创建'}</p>
                   </div>
                 </div>
                 <button
@@ -456,6 +449,6 @@ export default function AIChatPage() {
           </div>
         </div>
       </DashboardLayout>
-    </RequireAuth>
+    </RequireRole>
   )
 }

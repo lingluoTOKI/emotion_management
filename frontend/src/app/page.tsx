@@ -65,22 +65,33 @@ export default function HomePage() {
   // 初始化：检查是否有保存的登录信息
   useEffect(() => {
     const savedUsername = localStorage.getItem('saved_username')
-    const savedRole = localStorage.getItem('saved_role') as 'student' | 'counselor' | 'admin'
     const lastLogin = localStorage.getItem('last_login_time')
     
-    if (savedUsername && savedRole) {
+    if (savedUsername) {
       setFormData(prev => ({
         ...prev,
         username: savedUsername,
-        role: savedRole,
         rememberMe: true
       }))
+      // 根据用户名自动设置角色
+      updateRoleByUsername(savedUsername)
     }
     
     if (lastLogin) {
       setLastLoginTime(new Date(lastLogin).toLocaleString())
     }
   }, [])
+
+  // 根据用户名自动设置角色
+  const updateRoleByUsername = (username: string) => {
+    const testAccount = TEST_ACCOUNTS.find(acc => acc.username === username)
+    if (testAccount) {
+      setFormData(prev => ({
+        ...prev,
+        role: testAccount.role
+      }))
+    }
+  }
 
   // 表单验证
   const validateForm = (): boolean => {
@@ -191,10 +202,8 @@ export default function HomePage() {
         // 保存登录信息（如果选择了记住我）
         if (formData.rememberMe) {
           localStorage.setItem('saved_username', formData.username)
-          localStorage.setItem('saved_role', formData.role)
         } else {
           localStorage.removeItem('saved_username')
-          localStorage.removeItem('saved_role')
         }
         
         // 延迟跳转以显示成功动画
@@ -243,6 +252,11 @@ export default function HomePage() {
       ...formData,
       [name]: type === 'checkbox' ? (e.target as HTMLInputElement).checked : value
     })
+    
+    // 如果用户名改变，自动更新角色
+    if (name === 'username') {
+      updateRoleByUsername(value)
+    }
   }
 
   // 快速登录测试账号
@@ -355,11 +369,10 @@ export default function HomePage() {
           </AnimatePresence>
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* 角色选择（影响登录跳转） */}
+            {/* 角色选择 */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                账号类型偏好
-                <span className="text-xs text-gray-500 ml-2">（实际角色由您的账号权限决定）</span>
+                账号类型
               </label>
               <select
                 name="role"
@@ -374,21 +387,18 @@ export default function HomePage() {
                 <option value="counselor">心理咨询师</option>
                 <option value="admin">系统管理员</option>
               </select>
-              <p className="text-xs text-gray-500 mt-1">
-                💡 此选择会影响登录，系统会根据您的账号自动跳转相应的角色进行登录
-              </p>
             </div>
 
             {/* 用户名输入 */}
-            <div>
+          <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 用户名
               </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <User className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
+              </div>
+              <input
                   type="text"
                   name="username"
                   value={formData.username}
@@ -399,9 +409,9 @@ export default function HomePage() {
                       ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
                       : 'border-gray-300 focus:ring-blue-500 focus:border-transparent'
                   } ${isLoading || loginSuccess ? 'bg-gray-50 cursor-not-allowed' : ''}`}
-                  placeholder="请输入用户名"
-                />
-              </div>
+                placeholder="请输入用户名"
+              />
+            </div>
               {errors.username && (
                 <motion.p
                   initial={{ opacity: 0, y: -5 }}
@@ -412,15 +422,15 @@ export default function HomePage() {
                   <span>{errors.username}</span>
                 </motion.p>
               )}
-            </div>
+          </div>
 
             {/* 密码输入 */}
-            <div>
+          <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 密码
               </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <Lock className="h-5 w-5 text-gray-400" />
                 </div>
                 <input
@@ -525,7 +535,7 @@ export default function HomePage() {
                   <span>清除</span>
                 </button>
               </div>
-            </div>
+          </div>
           </form>
 
           {/* 测试账号区域 */}
@@ -543,7 +553,7 @@ export default function HomePage() {
                 </h3>
                 <div className="space-y-2">
                   {TEST_ACCOUNTS.map((account, index) => (
-                    <motion.button
+          <motion.button
                       key={account.username}
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
@@ -573,7 +583,7 @@ export default function HomePage() {
                           <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                         </div>
                       </div>
-                    </motion.button>
+          </motion.button>
                   ))}
                 </div>
                 <div className="mt-3 space-y-2">
@@ -596,24 +606,7 @@ export default function HomePage() {
             )}
           </AnimatePresence>
 
-          {/* 功能说明 */}
-          <div className="mt-8 pt-6 border-t border-gray-200">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">系统功能</h3>
-            <div className="space-y-2 text-xs text-gray-600">
-              <div className="flex items-center">
-                <Heart className="h-4 w-4 text-red-500 mr-2" />
-                <span>AI心理评估与情绪识别</span>
-              </div>
-              <div className="flex items-center">
-                <Shield className="h-4 w-4 text-green-500 mr-2" />
-                <span>智能咨询师匹配系统</span>
-              </div>
-              <div className="flex items-center">
-                <Brain className="h-4 w-4 text-blue-500 mr-2" />
-                <span>实时风险评估与预警</span>
-              </div>
-            </div>
-          </div>
+
         </motion.div>
 
         {/* 底部信息 */}
@@ -624,7 +617,7 @@ export default function HomePage() {
           className="text-center text-sm text-gray-500"
         >
           <p>© 2025 情绪管理系统. 保护您的心理健康.</p>
-        </motion.div>
+      </motion.div>
       </div>
     </div>
   )

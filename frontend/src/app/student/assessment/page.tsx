@@ -10,9 +10,16 @@ import {
   TrendingUp,
   Download,
   Share2,
-  ArrowLeft
+  ArrowLeft,
+  FileText,
+  BarChart3,
+  Clock,
+  ThumbsUp,
+  ThumbsDown
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import DashboardLayout from '@/components/DashboardLayout'
+import { RequireRole } from '@/components/AuthGuard'
 
 interface AssessmentQuestion {
   id: number
@@ -39,14 +46,33 @@ interface AssessmentResult {
   timestamp: Date
 }
 
+// 风险等级样式和标签工具函数
+const getRiskColor = (risk: 'low' | 'medium' | 'high') => {
+  switch (risk) {
+    case 'low': return 'bg-green-100 text-green-800'
+    case 'medium': return 'bg-yellow-100 text-yellow-800'
+    case 'high': return 'bg-red-100 text-red-800'
+  }
+}
+
+const getRiskLabel = (risk: 'low' | 'medium' | 'high') => {
+  switch (risk) {
+    case 'low': return '低风险'
+    case 'medium': return '中等风险'
+    case 'high': return '高风险'
+  }
+}
+
 export default function AssessmentPage() {
   const [currentStep, setCurrentStep] = useState(0)
   const [answers, setAnswers] = useState<Record<number, number>>({})
   const [isCompleted, setIsCompleted] = useState(false)
   const [result, setResult] = useState<AssessmentResult | null>(null)
+  // 新增：存储报告反馈状态
+  const [reportFeedback, setReportFeedback] = useState<boolean | null>(null)
   const router = useRouter()
 
-  // 模拟评估问题
+  // 评估问题数据
   const questions: AssessmentQuestion[] = [
     {
       id: 1,
@@ -110,6 +136,7 @@ export default function AssessmentPage() {
     }
   ]
 
+  // 用户权限验证
   useEffect(() => {
     const username = localStorage.getItem('username')
     const role = localStorage.getItem('user_role')
@@ -127,6 +154,45 @@ export default function AssessmentPage() {
     }
   }, [router])
 
+  // 导出完整报告功能
+  const exportFullReport = () => {
+    if (!result) return
+    const reportData = {
+      studentName: localStorage.getItem('username') || '匿名用户',
+      assessmentDate: result.timestamp.toLocaleString('zh-CN'),
+      overallScore: result.overallScore,
+      riskLevel: result.riskLevel,
+      riskLabel: getRiskLabel(result.riskLevel),
+      // 新增：将反馈状态加入导出报告
+      reportFeedback: reportFeedback === true ? '符合' : reportFeedback === false ? '不符合' : '未反馈',
+      categoryDetails: result.categories.map(cat => ({
+        name: cat.name,
+        score: cat.score,
+        level: cat.level,
+        levelLabel: getRiskLabel(cat.level as 'low' | 'medium' | 'high'),
+        description: cat.description,
+        suggestions: cat.suggestions
+      })),
+      comprehensiveRecommendations: result.recommendations,
+      completedQuestions: questions.map(q => ({
+        question: q.question,
+        category: q.category,
+        selectedAnswer: answers[q.id] 
+          ? q.options.find(o => o.value === answers[q.id])?.label 
+          : '未回答'
+      }))
+    }
+    const dataStr = JSON.stringify(reportData, null, 2)
+    const dataBlob = new Blob([dataStr], { type: 'application/json' })
+    const url = URL.createObjectURL(dataBlob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `心理评估完整报告_${new Date().toLocaleDateString()}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // 答案处理
   const handleAnswer = (questionId: number, value: number) => {
     if (value < 1 || value > 5) {
       console.error('无效的答案值:', value)
@@ -135,6 +201,7 @@ export default function AssessmentPage() {
     setAnswers(prev => ({ ...prev, [questionId]: value }))
   }
 
+  // 导航控制
   const handleNext = () => {
     if (currentStep < questions.length - 1) {
       setCurrentStep(currentStep + 1)
@@ -147,6 +214,7 @@ export default function AssessmentPage() {
     }
   }
 
+  // 完成评估处理
   const handleComplete = () => {
     const unansweredQuestions = questions.filter(q => answers[q.id] === undefined)
     
@@ -172,17 +240,22 @@ export default function AssessmentPage() {
     }
   }
 
+  // 新增：处理报告反馈选择
+  const handleReportFeedback = (isMatch: boolean) => {
+    setReportFeedback(isMatch)
+    // 可选：反馈选择后可添加提示（如“感谢您的反馈！”）
+    alert(isMatch ? '感谢您的认可，我们将继续优化评估服务！' : '感谢您的反馈，我们将努力改进评估准确性！')
+  }
+
+  // 分数计算
   const calculateOverallScore = () => {
     const answeredQuestions = questions.filter(q => answers[q.id] !== undefined)
-    
-    if (answeredQuestions.length === 0) {
-      return 0
-    }
-    
+    if (answeredQuestions.length === 0) return 0
     const total = answeredQuestions.reduce((sum, q) => sum + (answers[q.id] || 0), 0)
     return Math.round((total / answeredQuestions.length) * 20)
   }
 
+  // 生成各维度结果
   const generateCategoryResults = () => {
     const categories = ['焦虑', '抑郁', '睡眠', '压力管理', '人际关系']
     return categories.map(category => {
@@ -203,7 +276,6 @@ export default function AssessmentPage() {
       }, 0) / categoryQuestions.length
       
       const score = Math.round((categoryScore / 5) * 100)
-      
       let level: 'low' | 'medium' | 'high' = 'medium'
       if (score <= 40) level = 'low'
       else if (score >= 70) level = 'high'
@@ -218,6 +290,7 @@ export default function AssessmentPage() {
     })
   }
 
+  // 获取维度描述
   const getCategoryDescription = (category: string, level: 'low' | 'medium' | 'high') => {
     const descriptions: Record<string, Record<'low' | 'medium' | 'high', string>> = {
       '焦虑': {
@@ -246,15 +319,10 @@ export default function AssessmentPage() {
         high: '您的人际关系需要关注，建议寻求社交支持'
       }
     }
-    
-    const categoryDescriptions = descriptions[category]
-    if (!categoryDescriptions) {
-      return '暂无相关描述信息'
-    }
-    
-    return categoryDescriptions[level] || '暂无相关描述信息'
+    return descriptions[category]?.[level] || '暂无相关描述信息'
   }
 
+  // 获取维度建议
   const getCategorySuggestions = (category: string, level: 'low' | 'medium' | 'high') => {
     const suggestions: Record<string, Record<'low' | 'medium' | 'high', string[]>> = {
       '焦虑': {
@@ -283,15 +351,10 @@ export default function AssessmentPage() {
         high: ['学习社交技巧', '寻求专业指导', '建立支持网络']
       }
     }
-    
-    const categorySuggestions = suggestions[category]
-    if (!categorySuggestions) {
-      return ['建议咨询专业人士获取个性化建议']
-    }
-    
-    return categorySuggestions[level] || ['建议咨询专业人士获取个性化建议']
+    return suggestions[category]?.[level] || ['建议咨询专业人士获取个性化建议']
   }
 
+  // 计算风险等级
   const calculateRiskLevel = (): 'low' | 'medium' | 'high' => {
     try {
       const score = calculateOverallScore()
@@ -304,6 +367,7 @@ export default function AssessmentPage() {
     }
   }
 
+  // 生成综合建议
   const generateRecommendations = () => {
     try {
       const riskLevel = calculateRiskLevel()
@@ -347,6 +411,7 @@ export default function AssessmentPage() {
     }
   }
 
+  // 返回处理
   const handleBack = () => {
     if (Object.keys(answers).length > 0) {
       const confirmed = window.confirm('您有未完成的评估，确定要离开吗？')
@@ -355,355 +420,446 @@ export default function AssessmentPage() {
     router.push('/student/dashboard')
   }
 
+  // 计算进度百分比
   const getProgressPercentage = () => {
     if (questions.length === 0) return 0
     return ((currentStep + 1) / questions.length) * 100
   }
 
+  // 评估结果页
   if (isCompleted && result) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-        <nav className="bg-white shadow-sm border-b">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-16">
-              <div className="flex items-center space-x-4">
-                <button
-                  onClick={handleBack}
-                  className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <ArrowLeft className="h-5 w-5" />
-                </button>
-                <div className="p-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg">
-                  <Brain className="h-6 w-6 text-white" />
+      <RequireRole role="student">
+        {/* 通过DashboardLayout的title属性设置页面标题，避免重复 */}
+        <DashboardLayout title="心理评估结果">
+          <div className="space-y-6">
+            {/* 结果概览统计卡片 */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">总体健康评分</p>
+                    <p className="text-2xl font-bold text-gray-900">{result.overallScore}</p>
+                  </div>
+                  <Brain className="w-8 h-8 text-purple-600" />
                 </div>
-                <h1 className="text-xl font-semibold text-gray-900">心理评估结果</h1>
               </div>
               
-              <div className="flex space-x-2">
-                <button 
-                  onClick={() => {
-                    // 下载评估报告
-                    const reportData = {
-                      studentName: localStorage.getItem('username'),
-                      assessmentDate: new Date().toLocaleDateString(),
-                      overallScore: result?.overallScore,
-                      riskLevel: result?.riskLevel,
-                      recommendations: result?.recommendations
-                    }
-                    const dataStr = JSON.stringify(reportData, null, 2)
-                    const dataBlob = new Blob([dataStr], {type: 'application/json'})
-                    const url = URL.createObjectURL(dataBlob)
-                    const link = document.createElement('a')
-                    link.href = url
-                    link.download = `心理评估报告_${new Date().toLocaleDateString()}.json`
-                    link.click()
-                    URL.revokeObjectURL(url)
-                  }}
-                  className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center space-x-2"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>下载报告</span>
-                </button>
-                <button 
-                  onClick={() => {
-                    // 分享评估结果
-                    if (navigator.share) {
-                      navigator.share({
-                        title: '心理评估结果',
-                        text: `我刚完成了心理健康评估，总分：${result?.overallScore}分`,
-                        url: window.location.href
-                      })
-                    } else {
-                      // 复制到剪贴板
-                      navigator.clipboard.writeText(`我刚完成了心理健康评估，总分：${result?.overallScore}分`)
-                      alert('结果已复制到剪贴板')
-                    }
-                  }}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
-                >
-                  <Share2 className="h-4 w-4" />
-                  <span>分享结果</span>
-                </button>
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">风险等级</p>
+                    <p className={`text-sm font-semibold ${
+                      result.riskLevel === 'low' ? 'text-green-600' :
+                      result.riskLevel === 'medium' ? 'text-yellow-600' : 'text-red-600'
+                    }`}>
+                      {getRiskLabel(result.riskLevel)}
+                    </p>
+                  </div>
+                  {result.riskLevel === 'low' ? (
+                    <CheckCircle className="w-8 h-8 text-green-600" />
+                  ) : result.riskLevel === 'medium' ? (
+                    <AlertCircle className="w-8 h-8 text-yellow-600" />
+                  ) : (
+                    <AlertCircle className="w-8 h-8 text-red-600" />
+                  )}
+                </div>
+              </div>
+              
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">评估维度</p>
+                    <p className="text-2xl font-bold text-gray-900">{result.categories.length}</p>
+                  </div>
+                  <BarChart3 className="w-8 h-8 text-blue-600" />
+                </div>
+              </div>
+              
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">评估时间</p>
+                    <p className="text-sm font-semibold text-gray-700">
+                      {result.timestamp.toLocaleDateString('zh-CN')}
+                    </p>
+                  </div>
+                  <Clock className="w-8 h-8 text-gray-600" />
+                </div>
               </div>
             </div>
-          </div>
-        </nav>
 
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-6"
-          >
-            <div className="bg-white rounded-2xl shadow-lg p-8">
-              <div className="text-center">
-                <h2 className="text-3xl font-bold text-gray-900 mb-4">总体心理健康评分</h2>
-                <div className="relative inline-block">
-                  <div className="w-32 h-32 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-4xl font-bold">
+            {/* 主体内容容器 */}
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              {/* 顶部操作栏 */}
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={handleBack}
+                    className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <ArrowLeft className="h-5 w-5" />
+                  </button>
+                  <h2 className="text-xl font-semibold text-gray-900">心理评估报告</h2>
+                </div>
+                
+                <div className="flex space-x-3">
+                  <button 
+                    onClick={exportFullReport}
+                    className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>导出完整报告</span>
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (navigator.share) {
+                        navigator.share({
+                          title: '心理评估结果',
+                          text: `我刚完成了心理健康评估，总分：${result.overallScore}分，风险等级：${getRiskLabel(result.riskLevel)}`,
+                          url: window.location.href
+                        })
+                      } else {
+                        navigator.clipboard.writeText(
+                          `我刚完成了心理健康评估，总分：${result.overallScore}分，风险等级：${getRiskLabel(result.riskLevel)}，评估时间：${result.timestamp.toLocaleDateString('zh-CN')}`
+                        )
+                        alert('结果已复制到剪贴板')
+                      }
+                    }}
+                    className="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    <Share2 className="w-4 h-4" />
+                    <span>分享结果</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 1. 总体评分模块 */}
+              <div className="text-center mb-12">
+                <h3 className="text-lg font-medium text-gray-500 mb-4">总体心理健康评分</h3>
+                <div className="relative inline-block mb-6">
+                  <div className="w-36 h-36 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-5xl font-bold">
                     {result.overallScore}
                   </div>
-                  <div className="absolute -top-2 -right-2 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg">
+                  <div className="absolute -top-2 -right-2 w-10 h-10 bg-white rounded-full flex flex items-center justify-center shadow shadow-sm border">
                     {result.riskLevel === 'low' ? (
-                      <CheckCircle className="h-5 w-5 text-green-600" />
+                      <CheckCircle className="h-6 w-6 text-green-600" />
                     ) : result.riskLevel === 'medium' ? (
-                      <AlertCircle className="h-5 w-5 text-yellow-600" />
+                      <AlertCircle className="h-6 w-6 text-yellow-600" />
                     ) : (
-                      <AlertCircle className="h-5 w-5 text-red-600" />
+                      <AlertCircle className="h-6 w-6 text-red-600" />
                     )}
                   </div>
                 </div>
-                <p className="text-lg text-gray-600 mt-4">
-                  风险等级: 
-                  <span className={`ml-2 px-3 py-1 rounded-full text-sm font-medium ${
-                    result.riskLevel === 'low' ? 'bg-green-100 text-green-800' :
-                    result.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-red-100 text-red-800'
-                  }`}>
-                    {result.riskLevel === 'low' ? '低风险' : 
-                     result.riskLevel === 'medium' ? '中等风险' : '高风险'}
-                  </span>
-                </p>
-                <p className="text-gray-500 mt-2">评估时间: {result.timestamp.toLocaleString('zh-CN')}</p>
+                <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${getRiskColor(result.riskLevel)}`}>
+                  {getRiskLabel(result.riskLevel)}
+                </span>
+                <p className="text-gray-500 mt-3">评估时间: {result.timestamp.toLocaleString('zh-CN')}</p>
               </div>
-            </div>
 
-            <div className="bg-white rounded-2xl shadow-lg p-8">
-              <h3 className="text-2xl font-semibold text-gray-900 mb-6">各维度详细分析</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {result.categories.map((category, index) => (
-                  <motion.div
-                    key={category.name}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.1 }}
-                    className="p-6 border rounded-xl hover:shadow-lg transition-shadow"
-                  >
-                    <h4 className="font-semibold text-gray-900 mb-3">{category.name}</h4>
-                    <div className="mb-4">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-sm text-gray-600">评分</span>
-                        <span className="text-lg font-bold text-gray-900">{category.score}</span>
+              {/* 2. 各维度分析 */}
+              <div className="mb-12">
+                <h3 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                  <BarChart3 className="h-5 w-5 text-blue-600 mr-2" />
+                  各维度详细分析
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {result.categories.map((category, index) => (
+                    <motion.div
+                      key={category.name}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                      className="border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow"
+                    >
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="font-semibold text-gray-900">{category.name}</h4>
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          getRiskColor(category.level as 'low' | 'medium' | 'high')
+                        }`}>
+                          {getRiskLabel(category.level as 'low' | 'medium' | 'high')}
+                        </span>
                       </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div 
-                          className={`h-2 rounded-full transition-all duration-500 ${
-                            category.level === 'low' ? 'bg-green-500' :
-                            category.level === 'medium' ? 'bg-yellow-500' : 'bg-red-500'
-                          }`}
-                          style={{ width: `${category.score}%` }}
-                        ></div>
+                      
+                      <div className="mb-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-sm text-gray-600">维度得分</span>
+                          <span className="text-lg font-bold text-gray-900">{category.score}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className={`h-2 rounded-full transition-all duration-500 ${
+                              category.level === 'low' ? 'bg-green-500' :
+                              category.level === 'medium' ? 'bg-yellow-500' : 'bg-red-500'
+                            }`}
+                            style={{ width: `${category.score}%` }}
+                          ></div>
+                        </div>
                       </div>
-                    </div>
-                    <p className="text-sm text-gray-600 mb-3">{category.description}</p>
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-gray-700">建议:</p>
-                      {category.suggestions.map((suggestion, idx) => (
-                        <p key={idx} className="text-xs text-gray-600">• {suggestion}</p>
+                      
+                      <p className="text-sm text-gray-600 mb-3 line-clamp-2">{category.description}</p>
+                      
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-gray-700">改善建议:</p>
+                        {category.suggestions.map((suggestion, idx) => (
+                          <p key={idx} className="text-xs text-gray-600 flex items-start space-x-1.5">
+                            <CheckCircle className="h-3.5 w-3.5 text-green-600 mt-0.5 flex-shrink-0" />
+                            <span>{suggestion}</span>
+                          </p>
+                        ))}
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 3. 综合建议 */}
+              <div className="mb-12">
+                <h3 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                  <Heart className="h-5 w-5 text-red-600 mr-2" />
+                  综合健康建议
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="border border-gray-200 rounded-xl p-5">
+                    <h4 className="font-medium text-gray-900 mb-4">健康行动建议</h4>
+                    <ul className="space-y-3">
+                      {result.recommendations.slice(0, Math.ceil(result.recommendations.length / 2)).map((rec, idx) => (
+                        <li key={idx} className="flex items-start space-x-2">
+                          <CheckCircle className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                          <span className="text-gray-700 text-sm">{rec}</span>
+                        </li>
                       ))}
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl shadow-lg p-8">
-              <h3 className="text-2xl font-semibold text-gray-900 mb-6">综合建议</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <h4 className="font-medium text-gray-900 mb-4 flex items-center">
-                    <Heart className="h-5 w-5 text-red-500 mr-2" />
-                    健康建议
-                  </h4>
-                  <ul className="space-y-2">
-                    {result.recommendations.slice(0, Math.ceil(result.recommendations.length / 2)).map((rec, idx) => (
-                      <li key={idx} className="flex items-start space-x-2">
-                        <CheckCircle className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
-                        <span className="text-gray-700">{rec}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <h4 className="font-medium text-gray-900 mb-4 flex items-center">
-                    <TrendingUp className="h-5 w-5 text-blue-500 mr-2" />
-                    改善方向
-                  </h4>
-                  <ul className="space-y-2">
-                    {result.recommendations.slice(Math.ceil(result.recommendations.length / 2)).map((rec, idx) => (
-                      <li key={idx} className="flex items-start space-x-2">
-                        <CheckCircle className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
-                        <span className="text-gray-700">{rec}</span>
-                      </li>
-                    ))}
-                  </ul>
+                    </ul>
+                  </div>
+                  <div className="border border-gray-200 rounded-xl p-5">
+                    <h4 className="font-medium text-gray-900 mb-4">长期改善方向</h4>
+                    <ul className="space-y-3">
+                      {result.recommendations.slice(Math.ceil(result.recommendations.length / 2)).map((rec, idx) => (
+                        <li key={idx} className="flex items-start space-x-2">
+                          <CheckCircle className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                          <span className="text-gray-700 text-sm">{rec}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="bg-white rounded-2xl shadow-lg p-8">
-              <div className="text-center space-y-4">
-                <h3 className="text-xl font-semibold text-gray-900">下一步行动</h3>
+              {/* 新增：4. 报告反馈模块 */}
+              <div className="mb-12 border border-gray-200 rounded-2xl p-6 bg-gray-50">
+                <h3 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                  <AlertCircle className="h-5 w-5 text-blue-600 mr-2" />
+                  报告反馈
+                </h3>
+                <div className="flex flex-col items-center justify-center space-y-6">
+                  <p className="text-lg text-gray-700 text-center max-w-lg">
+                    您认为该评估报告是否符合您的心理状况？
+                  </p>
+                  <div className="flex space-x-8">
+                    {/* 是 - 符合按钮 */}
+                    <motion.button
+                      onClick={() => handleReportFeedback(true)}
+                      className={`flex flex-col items-center justify-center space-y-2 px-8 py-6 rounded-xl transition-all ${
+                        reportFeedback === true 
+                          ? 'bg-green-100 border-green-500 text-green-700 shadow-sm' 
+                          : 'bg-white border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                      } border w-48`}
+                      whileHover={{ scale: 1.03 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      <ThumbsUp className={`h-8 w-8 ${reportFeedback === true ? 'text-green-600' : 'text-gray-500'}`} />
+                      <span className="font-medium">是</span>
+                    </motion.button>
+
+                    {/* 否 - 不符合按钮 */}
+                    <motion.button
+                      onClick={() => handleReportFeedback(false)}
+                      className={`flex flex-col items-center justify-center space-y-2 px-8 py-6 rounded-xl transition-all ${
+                        reportFeedback === false 
+                          ? 'bg-red-100 border-red-500 text-red-700 shadow-sm' 
+                          : 'bg-white border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                      } border w-48`}
+                      whileHover={{ scale: 1.03 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      <ThumbsDown className={`h-8 w-8 ${reportFeedback === false ? 'text-red-600' : 'text-gray-500'}`} />
+                      <span className="font-medium">否</span>
+                    </motion.button>
+                  </div>
+                  {/* 反馈状态提示 */}
+                  {reportFeedback !== null && (
+                    <motion.p 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className={`text-sm ${reportFeedback === true ? 'text-green-600' : 'text-red-600'}`}
+                    >
+                      {reportFeedback === true 
+                        ? '您已确认报告符合您的心理状况' 
+                        : '您已反馈报告不符合您的心理状况'}
+                    </motion.p>
+                  )}
+                </div>
+              </div>
+
+              {/* 5. 下一步行动 */}
+              <div className="text-center">
+                <h3 className="text-xl font-semibold text-gray-900 mb-6">下一步行动</h3>
                 <div className="flex flex-col sm:flex-row justify-center space-y-3 sm:space-y-0 sm:space-x-4">
                   <button 
                     onClick={() => router.push('/student/dashboard')}
-                    className="bg-gray-100 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-200 transition-colors"
+                    className="px-6 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
                   >
                     返回仪表板
                   </button>
                   <button 
                     onClick={() => router.push('/student/consultation-matching')}
-                    className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors"
+                    className="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
                   >
                     智能匹配咨询师
                   </button>
                   <button 
                     onClick={() => router.push('/student/ai-assessment')}
-                    className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
+                    className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                   >
                     AI深度评估
                   </button>
                   <button 
                     onClick={() => router.push('/student/anonymous-consultation')}
-                    className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-colors"
+                    className="px-6 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
                   >
                     匿名咨询
                   </button>
                 </div>
               </div>
             </div>
-          </motion.div>
-              </div>
-    </div>
-    )
-} else {
-  // 显示评估问卷
+          </div>
+        </DashboardLayout>
+      </RequireRole>
+    );
+  } 
+  // 评估问卷页
+  else {
     return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <nav className="bg-white shadow-sm border-b">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={handleBack}
-                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
-              <div className="p-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg">
-                <Brain className="h-6 w-6 text-white" />
-              </div>
-              <h1 className="text-xl font-semibold text-gray-900">心理评估测试</h1>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <span className="text-sm text-gray-600">
-                {currentStep + 1} / {questions.length}
-              </span>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <div className="bg-white border-b">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="py-4">
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <motion.div
-                className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full"
-                initial={{ width: 0 }}
-                animate={{ width: `${getProgressPercentage()}%` }}
-                transition={{ duration: 0.5 }}
-              ></motion.div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <motion.div
-          key={currentStep}
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -20 }}
-          className="bg-white rounded-2xl shadow-lg p-8"
-        >
-          <div className="mb-8">
-            <div className="flex items-center space-x-3 mb-4">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Brain className="h-5 w-5 text-blue-600" />
-              </div>
-              <span className="text-sm text-blue-600 font-medium">
-                {questions[currentStep].category}
-              </span>
-            </div>
-            <h2 className="text-2xl font-semibold text-gray-900 leading-relaxed">
-              {questions[currentStep].question}
-            </h2>
-          </div>
-
-          <div className="space-y-4 mb-8">
-            {questions[currentStep].options.map((option) => (
-              <motion.button
-                key={option.value}
-                onClick={() => handleAnswer(questions[currentStep].id, option.value)}
-                className={`w-full p-4 text-left border-2 rounded-xl transition-all duration-200 ${answers[questions[currentStep].id] === option.value
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="font-medium text-gray-900 mb-1">
-                      {option.label}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      {option.description}
-                    </div>
+      <RequireRole role="student">
+        {/* 通过DashboardLayout的title属性设置页面标题，避免重复 */}
+        <DashboardLayout title="心理评估测试">
+          <div className="space-y-6">
+            {/* 进度条 */}
+            <div className="bg-white border-b">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="py-4">
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <motion.div
+                      className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${getProgressPercentage()}%` }}
+                      transition={{ duration: 0.5 }}
+                    ></motion.div>
                   </div>
-                  {answers[questions[currentStep].id] === option.value && (
-                    <CheckCircle className="h-5 w-5 text-blue-500" />
+                  <p className="text-right text-xs text-gray-500 mt-2">
+                    完成度: {Math.round(getProgressPercentage())}%
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 问卷主体 */}
+            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+              <motion.div
+                key={currentStep}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="bg-white rounded-2xl shadow-sm border p-8"
+              >
+                {/* 问题分类标签 */}
+                <div className="mb-6">
+                  <div className="flex items-center space-x-3 mb-4">
+                    <div className="p-2 bg-blue-100 rounded-lg">
+                      <Brain className="h-5 w-5 text-blue-600" />
+                    </div>
+                    <span className="px-3 py-1 bg-blue-50 text-blue-800 text-xs rounded-full font-medium">
+                      {questions[currentStep].category}
+                    </span>
+                  </div>
+                  {/* 问题文本 */}
+                  <h2 className="text-xl font-semibold text-gray-900 leading-relaxed">
+                    {currentStep + 1}. {questions[currentStep].question}
+                  </h2>
+                </div>
+
+                {/* 选项列表 */}
+                <div className="space-y-3 mb-8">
+                  {questions[currentStep].options.map((option) => (
+                    <motion.button
+                      key={option.value}
+                      onClick={() => handleAnswer(questions[currentStep].id, option.value)}
+                      className={`w-full p-4 text-left border rounded-xl transition-all duration-200 ${
+                        answers[questions[currentStep].id] === option.value
+                          ? 'border-blue-500 bg-blue-50 shadow-sm'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                      whileHover={{ scale: 1.01 }}
+                      whileTap={{ scale: 0.99 }}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="font-medium text-gray-900 mb-1">
+                            {option.label}
+                          </div>
+                          <div className="text-sm text-gray-600">
+                            {option.description}
+                          </div>
+                        </div>
+                        {answers[questions[currentStep].id] === option.value && (
+                          <CheckCircle className="h-5 w-5 text-blue-500 mt-0.5" />
+                        )}
+                      </div>
+                    </motion.button>
+                  ))}
+                </div>
+
+                {/* 操作按钮 */}
+                <div className="flex justify-between">
+                  <button
+                    onClick={handlePrevious}
+                    disabled={currentStep === 0}
+                    className="px-6 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    上一题
+                  </button>
+
+                  {currentStep === questions.length - 1 ? (
+                    <button
+                      onClick={handleComplete}
+                      disabled={questions.some(q => answers[q.id] === undefined)}
+                      className="px-6 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      提交评估
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleNext}
+                      disabled={answers[questions[currentStep].id] === undefined}
+                      className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      下一题
+                    </button>
                   )}
                 </div>
-              </motion.button>
-            ))}
+              </motion.div>
+
+              {/* 提示文本 */}
+              <div className="mt-6 text-center">
+                <p className="text-sm text-gray-500 flex items-center justify-center">
+                  <FileText className="h-4 w-4 mr-1.5" />
+                  请根据您最近一周的真实感受选择最符合的选项，答案无对错之分
+                </p>
+              </div>
+            </div>
           </div>
-
-          <div className="flex justify-between">
-            <button
-              onClick={handlePrevious}
-              disabled={currentStep === 0}
-              className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              上一题
-            </button>
-
-            {currentStep === questions.length - 1 ? (
-              <button
-                onClick={handleComplete}
-                disabled={questions.some(q => answers[q.id] === undefined)}
-                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                完成评估
-              </button>
-            ) : (
-              <button
-                onClick={handleNext}
-                disabled={answers[questions[currentStep].id] === undefined}
-                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                下一题
-              </button>
-            )}
-          </div>
-        </motion.div>
-
-        <div className="mt-6 text-center">
-          <p className="text-sm text-gray-500">
-            请根据您最近一周的真实感受选择最符合的选项
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+        </DashboardLayout>
+      </RequireRole>
+    );
   }
 }
