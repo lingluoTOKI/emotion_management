@@ -177,16 +177,6 @@ export default function AIChatPage() {
     return generalResponses[Math.floor(Math.random() * generalResponses.length)]
   }
 
-  const unwrap = async <T,>(resp: Response): Promise<T> => {
-    const json = await resp.json().catch(() => ({}))
-    // 兼容 ResponseHandler.success 的 { code, data, message }
-    if (json && typeof json === 'object') {
-      if (json.data) return json.data as T
-      return json as T
-    }
-    return json as T
-  }
-
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || isLoading) return
 
@@ -206,60 +196,110 @@ export default function AIChatPage() {
       // 确保会话存在
       let currentSessionId = sessionId
       if (!currentSessionId) {
-        const startResp = await api.ai.startSession({ problem_type: null, initial_message: null })
-        if (startResp.status === 401) throw new Error('unauthorized')
-        if (!startResp.ok) throw new Error(`start session failed: ${startResp.status}`)
-        const startData = await unwrap<AIStartSessionResponse>(startResp)
-        currentSessionId = (startData as any)?.session_id || startData?.session_id
-        if (!currentSessionId) throw new Error('no session_id returned')
+        console.log('🚀 创建新的AI会话...')
+        const startData = await api.ai.startSession({ 
+          problem_type: '心理健康咨询', 
+          initial_message: null 
+        })
+        currentSessionId = startData.session_id
+        if (!currentSessionId) throw new Error('创建会话失败：未返回session_id')
         setSessionId(currentSessionId)
+        console.log('✅ 会话创建成功:', currentSessionId)
       }
 
       // 发送对话
-      const chatResp = await api.ai.chat({ session_id: currentSessionId, message: userMessage.content })
-      if (chatResp.status === 401) throw new Error('unauthorized')
+      console.log('💬 发送消息到AI服务...', {
+        session_id: currentSessionId,
+        message: userMessage.content.slice(0, 50) + '...',
+        backend_url: 'http://localhost:8000'
+      })
+      
+      const chatData = await api.ai.chat({ 
+        session_id: currentSessionId, 
+        message: userMessage.content 
+      })
+      
+      console.log('📦 API返回数据:', chatData)
+      
+      const aiText = chatData.message || '我收到了您的消息，让我来帮助您。'
+      console.log('✅ 收到AI回复:', aiText.slice(0, 100) + '...')
+      
+      // 模拟打字效果
+      setTimeout(() => {
+        setIsTyping(false)
+        const aiMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'ai',
+          content: aiText,
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, aiMessage])
+      }, 800)
 
-      if (chatResp.ok) {
-        const data = await unwrap<AIChatResponse>(chatResp)
-        const aiText = (data as any)?.message || (data as any)?.ai_response || '我收到了您的消息，让我来帮助您。'
-        
-        // 模拟打字效果
-        setTimeout(() => {
-          setIsTyping(false)
-          const aiMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            type: 'ai',
-            content: aiText,
-            timestamp: new Date()
-          }
-          setMessages(prev => [...prev, aiMessage])
-        }, 800)
-      } else {
-        // 其他错误，降级本地回复
-        const errorText = await chatResp.text().catch(() => '')
-        console.log(`❌ API错误(${chatResp.status}):`, errorText)
-        const localResponse = generateLocalAIResponse(userMessage.content)
-        setTimeout(() => {
-          setIsTyping(false)
-          const aiMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            type: 'ai',
-            content: `[本地AI] ${localResponse}`,
-            timestamp: new Date()
-          }
-          setMessages(prev => [...prev, aiMessage])
-        }, 800)
-      }
     } catch (error: any) {
       console.error('🚨 AI聊天错误:', error)
       setIsTyping(false)
       
-      // 未认证或网络问题，使用本地智能回复
+      // 详细的错误日志，帮助调试
+      console.log('错误详情:', {
+        message: error.message,
+        status: error.status,
+        response: error.response,
+        stack: error.stack
+      })
+      
+      // 检查是否是认证错误
+      if (error.message && error.message.includes('401')) {
+        const authMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'ai',
+          content: '抱歉，您的登录状态已过期。请刷新页面重新登录后继续对话。',
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, authMessage])
+        return
+      }
+      
+      // 检查是否是会话丢失错误，如果是则重置会话
+      if (error.message && (error.message.includes('会话') || 
+          error.message.includes('session') ||
+          error.message.includes('创建会话失败'))) {
+        console.log('🔄 检测到会话问题，重置会话状态')
+        setSessionId(null)  // 清空session_id，下次发送时会自动创建新会话
+        
+        // 显示会话恢复提示
+        const recoveryMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'ai',
+          content: '检测到连接中断，我已重新建立连接。请重新发送您的消息，我会继续为您提供帮助。',
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, recoveryMessage])
+        return
+      }
+      
+      // 检查是否是网络连接错误
+      if (error.message && (error.message.includes('fetch') || 
+          error.message.includes('network') ||
+          error.message.includes('连接') ||
+          error.message.includes('timeout'))) {
+        const networkMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'ai',
+          content: '网络连接似乎有问题。请检查网络连接后重试，或者稍后再试。',
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, networkMessage])
+        return
+      }
+      
+      // 只有在真正无法解决的情况下才使用本地回复
+      console.warn('使用本地AI回复作为最后的备选方案')
       const localResponse = generateLocalAIResponse(userMessage.content)
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'ai',
-        content: `[本地AI] ${localResponse}`,
+        content: `⚠️ 服务暂时不可用，以下是离线回复：\n\n${localResponse}`,
         timestamp: new Date()
       }
       setMessages(prev => [...prev, aiMessage])

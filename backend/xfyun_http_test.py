@@ -96,10 +96,10 @@ def test_direct_api():
     try:
         from openai import OpenAI
         
-        # 使用内置配置
-        api_key = "sk-4JpoOnxubRLv83ppEc8e0b51935049D9B1B4543103845bC2"
-        api_base = "https://maas-api.cn-huabei-1.xf-yun.com/v1"
-        model_id = "xopgptoss120b"
+        # 使用星火X1模型配置 - 使用完整的APIpassword
+        api_key = "EzKgmeawIpXfiarncVSA:iIslfPOGbFKAvraGyOCr"  # 完整的APIpassword
+        api_base = "https://spark-api-open.xf-yun.com/v2"
+        model_id = "x1"  # 星火X1模型
         
         client = OpenAI(api_key=api_key, base_url=api_base)
         
@@ -107,7 +107,8 @@ def test_direct_api():
             model=model_id,
             messages=[{"role": "user", "content": "简单回答：你好"}],
             max_tokens=30,
-            temperature=0.7
+            temperature=0.7,
+            user="user_test"  # 必需参数
         )
         
         if response and response.choices:

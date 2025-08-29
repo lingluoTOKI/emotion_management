@@ -46,7 +46,7 @@ async def start_ai_counseling(
     开始AI心理辅导会话
     支持文字和语音输入
     """
-    ai_service = AICounselingService()
+    ai_service = AICounselingService(db)
     
     # 创建AI辅导会话
     session_data = await ai_service.start_session(
@@ -69,7 +69,7 @@ async def continue_ai_chat(
     """
     继续AI辅导对话
     """
-    ai_service = AICounselingService()
+    ai_service = AICounselingService(db)
     
     # 继续对话
     response_data = await ai_service.continue_conversation(
@@ -95,7 +95,7 @@ async def end_ai_counseling(
     结束AI辅导会话
     生成会话总结和建议
     """
-    ai_service = AICounselingService()
+    ai_service = AICounselingService(db)
     return await ai_service.end_session(end_request.session_id)
 
 @router.get("/session/{session_id}/summary")
@@ -107,7 +107,7 @@ async def get_session_summary(
     """
     获取AI辅导会话总结
     """
-    ai_service = AICounselingService()
+    ai_service = AICounselingService(db)
     return await ai_service.get_session_summary(session_id)
 
 @router.get("/sessions/history")

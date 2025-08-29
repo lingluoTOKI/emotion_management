@@ -23,18 +23,18 @@ class XFYunAIService:
     """科大讯飞AI服务类"""
     
     def __init__(self):
-        # HTTP接口配置 - 基于您的服务控制台信息
-        self.http_api_key = "sk-4JpoOnxubRLv83ppEc8e0b51935049D9B1B4543103845bC2"
-        self.http_base_url = "https://maas-api.cn-huabei-1.xf-yun.com/v1"  # 使用控制台显示的https
+        # HTTP接口配置 - 基于星火X1模型官方文档  
+        self.http_api_key = "EzKgmeawIpXfiarncVSA:iIslfPOGbFKAvraGyOCr"  # 完整的APIpassword
+        self.http_base_url = "https://spark-api-open.xf-yun.com/v2"  # 使用控制台显示的实际地址
         
         # WebSocket接口配置 - 基于您的服务控制台信息
         self.ws_app_id = "22402cd9"
         self.ws_api_key = "ce15803676c1ecda114a04c6523f4bca"
         self.ws_api_secret = "YjVkMmE2N2MyNjQ3ZDNjYmY4ZTNlMzU3"
-        self.ws_base_url = "wss://maas-api.cn-huabei-1.xf-yun.com/v1.1/chat"
+        self.ws_base_url = "wss://spark-api-open.xf-yun.com/v2/chat"  # 更新WebSocket地址
         
-        # 默认模型配置 - 使用正确的modelId
-        self.default_model = "xopgptoss120b"  # 正确的modelId
+        # 默认模型配置 - 星火X1模型
+        self.default_model = "x1"  # 星火X1模型
         
         logger.info("科大讯飞AI服务初始化完成，配置已内置")
         
@@ -65,8 +65,7 @@ class XFYunAIService:
             
             headers = {
                 "Authorization": f"Bearer {self.http_api_key}",
-                "Content-Type": "application/json",
-                "lora_id": "0"  # 官方文档推荐的额外头部
+                "Content-Type": "application/json"
             }
             
             payload = {
@@ -75,7 +74,7 @@ class XFYunAIService:
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": stream,
-                "search_disable": True  # 关闭联网搜索
+                "user": "user_001"  # 必需参数：用户唯一ID
             }
             
             # 设置较长的超时时间

@@ -7,16 +7,24 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import json
 import openai
+from sqlalchemy.orm import Session
+
 from app.core.config import settings
+from app.core.database import get_db
+from app.models.ai_counseling import AICounselingSession, RiskAssessment
+from app.models.user import Student
 from loguru import logger
 from app.services.xfyun_ai_service import xfyun_ai_service
 
 class AICounselingService:
     """AI心理咨询服务类"""
     
-    def __init__(self):
-        self.conversation_history = {}
-        self.risk_assessments = {}
+    def __init__(self, db: Session = None):
+        # 使用全局会话存储作为缓存，但主要依赖数据库
+        global global_conversation_history, global_risk_assessments
+        self.conversation_history = global_conversation_history
+        self.risk_assessments = global_risk_assessments
+        self.db = db
         
         # AI服务优先级配置
         self.ai_service_priority = ["xfyun", "openai", "fallback"]
@@ -30,7 +38,41 @@ class AICounselingService:
     
     async def start_session(self, student_id: int, problem_type: str = None) -> Dict[str, Any]:
         """开始AI咨询会话"""
-        session_id = f"ai_session_{student_id}_{datetime.utcnow().timestamp()}"
+        
+        # 在数据库中创建会话记录
+        db_session = None
+        if self.db:
+            try:
+                # 首先检查学生记录是否存在
+                from app.models.user import Student
+                student_record = self.db.query(Student).filter(Student.user_id == student_id).first()
+                
+                if student_record:
+                    db_session = AICounselingSession(
+                        student_id=student_record.id,  # 使用学生记录的ID而不是用户ID
+                        session_type="text",
+                        conversation_history=[],
+                        emotion_analysis={},
+                        risk_assessment={},
+                        status="active"
+                    )
+                    self.db.add(db_session)
+                    self.db.commit()
+                    self.db.refresh(db_session)
+                    logger.info(f"数据库会话创建成功，ID: {db_session.id}")
+                else:
+                    logger.warning(f"学生记录不存在，user_id: {student_id}，跳过数据库存储")
+                    
+            except Exception as e:
+                logger.error(f"创建数据库会话失败: {e}")
+                self.db.rollback()
+                db_session = None
+        
+        # 生成会话ID，包含数据库ID以便后续查找
+        if db_session and hasattr(db_session, 'id') and db_session.id:
+            session_id = f"ai_session_{student_id}_{db_session.id}"
+        else:
+            session_id = f"ai_session_{student_id}_{int(datetime.utcnow().timestamp())}"
         
         # 初始化会话
         session_data = {
@@ -41,7 +83,8 @@ class AICounselingService:
             "conversation_history": [],
             "current_emotion": "neutral",
             "risk_level": "low",
-            "session_status": "active"
+            "session_status": "active",
+            "db_session_id": db_session.id if db_session else None
         }
         
         self.conversation_history[session_id] = session_data
@@ -58,9 +101,49 @@ class AICounselingService:
     async def continue_conversation(self, session_id: str, user_message: str) -> Dict[str, Any]:
         """继续AI咨询对话"""
         if session_id not in self.conversation_history:
-            return {"error": "会话不存在"}
+            # 尝试从数据库恢复会话
+            logger.warning(f"会话 {session_id} 从内存中丢失，尝试从数据库恢复")
+            db_session_data = self._load_conversation_from_db(session_id)
+            
+            if db_session_data and db_session_data.get("conversation_history"):
+                # 从数据库成功恢复会话历史
+                self.conversation_history[session_id] = db_session_data
+                logger.info(f"从数据库恢复会话 {session_id}，历史记录: {len(db_session_data['conversation_history'])} 条")
+                session = self.conversation_history[session_id]
+            else:
+                # 数据库中也没有，创建新会话
+                logger.warning(f"数据库中也未找到会话 {session_id}，创建新会话")
+                user_id = session_id.split("_")[-2] if "_" in session_id else "unknown"
+                self.conversation_history[session_id] = {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "start_time": datetime.now(),
+                    "conversation_history": [],
+                    "problem_type": "续连会话",
+                    "session_data": {"auto_recovered": True}
+                }
+                
+                # 智能处理会话恢复，分析当前用户消息的情绪状态
+                emotion_analysis = await self._analyze_user_emotion(user_message)
+                risk_assessment = await self._assess_risk_level(user_message, emotion_analysis)
+                
+                # 根据用户当前消息生成合适的回复
+                ai_response = await self._generate_ai_response_with_fallback(
+                    user_message, emotion_analysis, {"conversation_history": []}
+                )
+                
+                # 添加恢复提示但保持对当前消息的回应
+                recovery_message = f"抱歉刚才连接中断了一下。{ai_response}"
+                
+                return {
+                    "message": recovery_message,
+                    "emotion_analysis": emotion_analysis,
+                    "risk_assessment": risk_assessment,
+                    "session_id": session_id
+                }
         
-        session = self.conversation_history[session_id]
+        else:
+            session = self.conversation_history[session_id]
         
         # 记录用户消息
         session["conversation_history"].append({
@@ -88,6 +171,9 @@ class AICounselingService:
             "emotion_analysis": emotion_analysis,
             "risk_assessment": risk_assessment
         })
+        
+        # 保存到数据库
+        self._save_conversation_to_db(session_id, session)
         
         # 检查是否需要紧急干预
         if risk_assessment.get("risk_level") == "high":
@@ -122,7 +208,7 @@ class AICounselingService:
         session = self.conversation_history[session_id]
         return await self._generate_session_summary(session)
     
-    async def _generate_opening_message(self, problem_type: str = None) -> str:
+    def _generate_opening_message(self, problem_type: str = None) -> str:
         """生成开场白"""
         if problem_type:
             return f"您好！我是您的AI心理咨询助手。我了解到您想讨论关于{problem_type}的问题。请告诉我您的具体情况，我会尽力帮助您。"
@@ -171,14 +257,15 @@ class AICounselingService:
         
         # 高风险关键词
         high_risk_keywords = [
-            "自杀", "死亡", "不想活", "结束生命", "结束一切",
-            "伤害自己", "自残", "割腕", "上吊", "跳楼"
+            "自杀", "死亡", "不想活", "结束生命", "结束一切", "想死",
+            "伤害自己", "自残", "割腕", "上吊", "跳楼", "活着没有意义",
+            "死了算了", "一了百了", "去死", "轻生"
         ]
         
         # 中风险关键词
         medium_risk_keywords = [
-            "绝望", "痛苦", "没有希望", "看不到未来",
-            "没人理解", "孤独", "被抛弃"
+            "绝望", "痛苦", "没有希望", "看不到未来", "很累", "累得不行",
+            "没人理解", "孤独", "被抛弃", "撑不下去", "受不了", "崩溃"
         ]
         
         risk_score = 0
@@ -226,15 +313,15 @@ class AICounselingService:
         
         # 高风险情况优先处理
         if risk_level == "high":
-            response = self._generate_high_risk_response(user_message)
+            response_text = self._generate_high_risk_response(user_message)
         else:
             # 尝试使用配置的AI服务生成回复
-            response = await self._generate_ai_response_with_fallback(
+            response_text = await self._generate_ai_response_with_fallback(
                 user_message, emotion_analysis, session
             )
         
         return {
-            "message": response,
+            "message": response_text,
             "emotion_analysis": emotion_analysis,
             "risk_assessment": risk_assessment,
             "session_id": session["session_id"]
@@ -311,13 +398,13 @@ class AICounselingService:
         # 构建系统提示
         system_prompt = self._build_system_prompt(dominant_emotion)
         
-        # 构建消息历史
-        messages = [{"role": "system", "content": system_prompt}]
+        # 构建消息历史（只传递文本内容，避免datetime序列化问题）
+        messages = []
         
         # 添加最近的对话历史（最多10轮）
         recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
         for msg in recent_history:
-            if msg["role"] in ["user", "assistant"]:
+            if msg["role"] in ["user", "assistant"] and "message" in msg:
                 messages.append({
                     "role": msg["role"],
                     "content": msg["message"]
@@ -399,6 +486,15 @@ class AICounselingService:
         
         conversation_history = session.get("conversation_history", [])
         
+        # 转换对话历史为简单格式（避免datetime序列化问题）
+        simple_history = []
+        for msg in conversation_history[-10:]:  # 只保留最近10轮对话
+            if msg.get("role") in ["user", "assistant"] and "message" in msg:
+                simple_history.append({
+                    "role": msg["role"],
+                    "content": msg["message"]
+                })
+        
         # 按优先级尝试不同的AI服务
         for service_name in self.ai_service_priority:
             try:
@@ -406,7 +502,7 @@ class AICounselingService:
                     # 使用科大讯飞AI服务
                     response = await xfyun_ai_service.generate_psychological_response(
                         user_message=user_message,
-                        conversation_history=conversation_history,
+                        conversation_history=simple_history,
                         context=context,
                         use_websocket=False  # 使用稳定的HTTP接口
                     )
@@ -592,3 +688,112 @@ class AICounselingService:
         recommendations.append("适当运动释放压力")
         
         return recommendations
+
+    def _get_or_create_db_session(self, session_id: str, user_id: int) -> Optional[AICounselingSession]:
+        """获取或创建数据库会话记录"""
+        if not self.db:
+            return None
+            
+        try:
+            # 尝试从数据库获取现有会话
+            db_session = self.db.query(AICounselingSession).filter(
+                AICounselingSession.id == int(session_id.split("_")[-1]) if "_" in session_id else 0
+            ).first()
+            
+            if not db_session:
+                # 创建新的数据库会话
+                db_session = AICounselingSession(
+                    student_id=user_id,
+                    session_type="text",
+                    conversation_history=[],
+                    emotion_analysis={},
+                    risk_assessment={},
+                    status="active"
+                )
+                self.db.add(db_session)
+                self.db.commit()
+                self.db.refresh(db_session)
+                
+            return db_session
+        except Exception as e:
+            logger.error(f"数据库会话操作失败: {str(e)}")
+            return None
+
+    def _save_conversation_to_db(self, session_id: str, conversation_data: Dict[str, Any]):
+        """保存对话数据到数据库"""
+        if not self.db:
+            return
+            
+        try:
+            # 从session_id提取数据库ID
+            db_id = conversation_data.get("db_session_id")
+            if not db_id:
+                # 尝试从session_id解析
+                parts = session_id.split("_")
+                if len(parts) >= 3:
+                    try:
+                        db_id = int(parts[-1])
+                    except ValueError:
+                        logger.warning(f"无法从session_id {session_id} 解析数据库ID")
+                        return
+                else:
+                    logger.warning(f"session_id格式不正确: {session_id}")
+                    return
+            
+            db_session = self.db.query(AICounselingSession).filter(
+                AICounselingSession.id == db_id
+            ).first()
+            
+            if db_session:
+                db_session.conversation_history = conversation_data.get("conversation_history", [])
+                db_session.emotion_analysis = conversation_data.get("emotion_analysis", {})
+                db_session.risk_assessment = conversation_data.get("risk_assessment", {})
+                self.db.commit()
+                
+        except Exception as e:
+            logger.error(f"保存对话到数据库失败: {str(e)}")
+
+    def _load_conversation_from_db(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """从数据库加载对话数据"""
+        if not self.db:
+            return None
+            
+        try:
+            # 从session_id提取数据库ID：ai_session_{student_id}_{db_id}
+            parts = session_id.split("_")
+            if len(parts) >= 3:
+                try:
+                    db_id = int(parts[-1])  # 最后一部分是数据库ID
+                    db_session = self.db.query(AICounselingSession).filter(
+                        AICounselingSession.id == db_id
+                    ).first()
+                except ValueError:
+                    # 如果最后一部分不是数字，尝试按学生ID查找最新会话
+                    student_id = int(parts[2]) if len(parts) > 2 else 0
+                    db_session = self.db.query(AICounselingSession).filter(
+                        AICounselingSession.student_id == student_id,
+                        AICounselingSession.status == "active"
+                    ).order_by(AICounselingSession.created_at.desc()).first()
+            else:
+                db_session = None
+            
+            if db_session:
+                return {
+                    "session_id": session_id,
+                    "user_id": db_session.student_id,
+                    "start_time": db_session.start_time,
+                    "conversation_history": db_session.conversation_history or [],
+                    "emotion_analysis": db_session.emotion_analysis or {},
+                    "risk_assessment": db_session.risk_assessment or {},
+                    "status": db_session.status,
+                    "session_data": {"db_session_id": db_session.id}
+                }
+        except Exception as e:
+            logger.error(f"从数据库加载对话失败: {str(e)}")
+            
+        return None
+
+
+# 全局会话存储（在实际生产环境中应该使用Redis或数据库）
+global_conversation_history = {}
+global_risk_assessments = {}
