@@ -115,7 +115,7 @@ async def system_diagnostics(db: Session = Depends(get_db)):
         "configuration": {
             "openai_configured": bool(settings.OPENAI_API_KEY),
             "redis_configured": bool(settings.REDIS_URL),
-            "allowed_origins": len(settings.ALLOWED_ORIGINS)
+            "allowed_origins": len(settings.ALLOWED_ORIGINS.split(","))
         }
     }
     

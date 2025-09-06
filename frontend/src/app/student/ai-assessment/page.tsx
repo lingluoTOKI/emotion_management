@@ -31,7 +31,7 @@ import DashboardLayout from '@/components/DashboardLayout'
 import { RequireRole } from '@/components/AuthGuard'
 import { getUserInfo } from '@/lib/auth'
 import type { UserInfo } from '@/lib/auth'
-import { api, type AIAssessmentResponse, type AIAssessmentResult } from '@/lib'
+import { api, type AIAssessmentResponse, type AIAssessmentResult, type ComprehensiveAssessmentResponse, type AssessmentReadinessResponse, type AvailableScale } from '@/lib'
 
 interface AssessmentResult {
   emotionalState: {
@@ -103,11 +103,12 @@ const assessmentQuestions = [
 
 export default function StudentAIAssessment() {
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
-  const [currentStep, setCurrentStep] = useState<'intro' | 'conversation' | 'questions' | 'result'>('intro')
+  const [currentStep, setCurrentStep] = useState<'intro' | 'conversation' | 'questions' | 'result' | 'comprehensive-options' | 'comprehensive-results'>('intro')
   const [isRecording, setIsRecording] = useState(false)
   const [conversationMode, setConversationMode] = useState<'text' | 'voice'>('text')
   const [messages, setMessages] = useState<Array<{id: string, type: 'user' | 'ai', content: string, timestamp: Date}>>([])
   const [currentInput, setCurrentInput] = useState('')
+  const [isAIResponding, setIsAIResponding] = useState(false)
   const [questionIndex, setQuestionIndex] = useState(0)
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, number>>({})
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null)
@@ -115,7 +116,18 @@ export default function StudentAIAssessment() {
   const [reportAccuracy, setReportAccuracy] = useState<'accurate' | 'inaccurate' | null>(null)
   const [audioEnabled, setAudioEnabled] = useState(true)
   const [currentAssessmentId, setCurrentAssessmentId] = useState<number | null>(null)
+  
+  // 综合评估相关状态
+  const [showComprehensiveOptions, setShowComprehensiveOptions] = useState(false)
+  const [availableScales, setAvailableScales] = useState<AvailableScale[]>([])
+  const [selectedScales, setSelectedScales] = useState<string[]>([])
+  const [scaleResults, setScaleResults] = useState<Record<string, any>>({})
+  const [isGeneratingComprehensive, setIsGeneratingComprehensive] = useState(false)
+  const [comprehensiveReport, setComprehensiveReport] = useState<ComprehensiveAssessmentResponse | null>(null)
+  const [currentAISessionId, setCurrentAISessionId] = useState<string | null>(null)
+  const [assessmentReadiness, setAssessmentReadiness] = useState<AssessmentReadinessResponse | null>(null)
   const [assessmentSessionId, setAssessmentSessionId] = useState<string | null>(null)
+  const [showManualRedirect, setShowManualRedirect] = useState(false)
   
   // 智能评估相关状态
   const [assessmentProgress, setAssessmentProgress] = useState<{
@@ -124,12 +136,21 @@ export default function StudentAIAssessment() {
     coveredTopics: string[]       // 已经涵盖的主题
     currentPhase: 'exploration' | 'targeted' | 'completion'  // 评估阶段
     questionCount: number         // 已问问题数量
+    answeredQuestions: Array<{    // 新增：已回答的问题
+      question: string
+      answer: string
+      emotion_analysis?: any
+      timestamp: Date
+    }>
+    totalQuestions: number        // 总问题数
   }>({
     phq9: {},
     gad7: {},
     coveredTopics: [],
     currentPhase: 'exploration',
-    questionCount: 0
+    questionCount: 0,
+    answeredQuestions: [],
+    totalQuestions: 6   // 设置总评估项目为6个
   })
   
   const [emotionTrend, setEmotionTrend] = useState<{
@@ -138,9 +159,14 @@ export default function StudentAIAssessment() {
     riskLevel: 'low' | 'medium' | 'high'
   }>({
     timeline: [],
-    currentDominant: '中性',
+    currentDominant: '平稳',
     riskLevel: 'low'
   })
+  
+  // 添加状态变化监听
+  useEffect(() => {
+    console.log('🔄 emotionTrend状态变化:', emotionTrend)
+  }, [emotionTrend])
   
   const router = useRouter()
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -159,10 +185,31 @@ export default function StudentAIAssessment() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  // 格式化Markdown文本
+  const formatMarkdown = (text: string): string => {
+    return text
+      // 粗体 **text** -> <strong>text</strong>
+      .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
+      // 斜体 *text* -> <em>text</em> (但要避免与粗体冲突)
+      .replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, '<em class="italic">$1</em>')
+      // 代码 `code` -> <code>code</code>
+      .replace(/`(.*?)`/g, '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm font-mono">$1</code>')
+      // 序号列表 ① ② ③ 等，添加样式和间距
+      .replace(/(①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩)/g, '<span class="inline-block font-medium text-blue-600 mr-1">$1</span>')
+      // 项目符号 • 
+      .replace(/•/g, '<span class="text-blue-500 mr-1">•</span>')
+      // 破折号 —— 
+      .replace(/——/g, '<span class="text-gray-600">——</span>')
+      // 问号 ？
+      .replace(/？/g, '<span class="text-blue-600">？</span>')
+      // 换行符（放在最后处理）
+      .replace(/\n/g, '<br>')
+  }
+
   // 智能评估核心函数
   
   // 分析用户回答中的情绪和主题
-  const analyzeUserResponse = (response: string, emotionData?: any) => {
+  const analyzeUserResponse = (response: string, emotionData?: any, updateEmotion: boolean = true) => {
     const lowerResponse = response.toLowerCase()
     
     // 检测涵盖的主题
@@ -268,22 +315,46 @@ export default function StudentAIAssessment() {
       riskLevel = 'medium'
     }
     
-    // 更新情绪趋势
+    // 更新情绪趋势 - 优先使用EasyBert分析结果
     const dominantEmotion = emotionData?.dominant_emotion || 
       (phq9Total > gad7Total ? '抑郁倾向' : gad7Total > 5 ? '焦虑倾向' : '稳定')
+    
+    // 映射情绪显示名称
+    const emotionMapping: Record<string, string> = {
+      'sadness': '悲伤',
+      'anxiety': '焦虑',
+      'anger': '愤怒',
+      'happiness': '开心',
+      'neutral': '平稳',
+      'depression': '抑郁',
+      '抑郁倾向': '抑郁倾向',
+      '焦虑倾向': '焦虑倾向',
+      '稳定': '稳定'
+    }
+    const emotionDisplayName = emotionMapping[dominantEmotion] || dominantEmotion
     
     // 确保情绪状态总是被更新，即使没有明显的关键词匹配
     const newIntensity = emotionData?.emotion_intensity || Math.max(phq9Total, gad7Total) / 10
     
-    setEmotionTrend(prev => ({
-      timeline: [...prev.timeline, {
-        timestamp: new Date(),
-        emotion: dominantEmotion,
-        intensity: Math.max(0.1, newIntensity) // 确保至少有一些强度值
-      }],
-      currentDominant: dominantEmotion,
-      riskLevel
-    }))
+    // 只有在允许更新情绪时才更新（但不更新风险等级，让后端AI的评估优先）
+    if (updateEmotion) {
+      setEmotionTrend(prev => {
+        const newState = {
+          timeline: [...prev.timeline, {
+            timestamp: new Date(),
+            emotion: dominantEmotion,
+            intensity: Math.max(0.1, newIntensity) // 确保至少有一些强度值
+          }],
+          currentDominant: emotionDisplayName,
+          riskLevel: prev.riskLevel // 保持之前的风险等级，不被PHQ9/GAD7覆盖
+        }
+        console.log('📊 analyzeUserResponse情绪状态更新:', prev.currentDominant, '->', newState.currentDominant)
+        console.log('📊 保持风险等级不变:', prev.riskLevel)
+        return newState
+      })
+    } else {
+      console.log('📊 跳过analyzeUserResponse情绪更新，使用EasyBert结果')
+    }
     
     console.log('🔄 情绪状态更新:', {
       dominant: dominantEmotion,
@@ -310,9 +381,9 @@ export default function StudentAIAssessment() {
     return updatedProgress
   }
   
-  // 生成下一个智能问题
+  // 生成下一个智能问题 - 动态随机选择
   const generateNextQuestion = (progress: typeof assessmentProgress) => {
-    const { coveredTopics, currentPhase, questionCount } = progress
+    const { coveredTopics, currentPhase, questionCount, answeredQuestions } = progress
     
     // 检查是否需要进入下一阶段
     if (currentPhase === 'exploration' && questionCount >= 3) {
@@ -328,23 +399,58 @@ export default function StudentAIAssessment() {
     
     // 根据阶段选择问题
     if (currentPhase === 'exploration') {
-      // 探索阶段：开放性问题
+      // 探索阶段：多样化的开放性问题
       const openQuestions = [
         '能详细说说您最近的心情变化吗？',
         '什么事情最让您感到困扰？',
-        '您觉得影响您心情的主要因素是什么？'
+        '您觉得影响您心情的主要因素是什么？',
+        '最近有什么事情让您印象深刻吗？',
+        '您平时是如何应对压力的？',
+        '有什么事情会让您感到特别开心或放松？',
+        '您觉得自己最近的状态和以前相比有什么变化？',
+        '在人际关系方面，您最近有什么感受？',
+        '工作或学习方面，您最近遇到了什么挑战？',
+        '您对未来有什么期待或担忧吗？'
       ]
-      return openQuestions[questionCount % openQuestions.length]
+      
+      // 随机选择一个未问过的问题
+      const usedQuestions = answeredQuestions.map(q => q.question)
+      const availableQuestions = openQuestions.filter(q => !usedQuestions.includes(q))
+      
+      if (availableQuestions.length > 0) {
+        const randomIndex = Math.floor(Math.random() * availableQuestions.length)
+        return availableQuestions[randomIndex]
+      } else {
+        // 如果都问过了，使用备选问题
+        return '还有什么其他想和我分享的吗？'
+      }
     } else if (currentPhase === 'targeted') {
-      // 针对性阶段：基于PHQ-9和GAD-7的具体问题
+      // 针对性阶段：基于PHQ-9和GAD-7的具体问题，但加入变化
+      const targetedQuestions = []
+      
       if (uncoveredPhq9.length > 0) {
-        return uncoveredPhq9[0].dialogue
-      } else if (uncoveredGad7.length > 0) {
-        return uncoveredGad7[0].dialogue
+        const question = uncoveredPhq9[Math.floor(Math.random() * uncoveredPhq9.length)]
+        targetedQuestions.push(question.dialogue)
+      }
+      
+      if (uncoveredGad7.length > 0) {
+        const question = uncoveredGad7[Math.floor(Math.random() * uncoveredGad7.length)]
+        targetedQuestions.push(question.dialogue)
+      }
+      
+      // 添加一些过渡性问题
+      targetedQuestions.push(
+        '基于您刚才的分享，我想更深入了解一下...',
+        '您刚才提到的情况，能再详细说说吗？',
+        '这种感受对您的日常生活有什么影响？'
+      )
+      
+      if (targetedQuestions.length > 0) {
+        return targetedQuestions[Math.floor(Math.random() * targetedQuestions.length)]
       }
     }
     
-    return '感谢您的分享，我们即将进入一些标准化的评估问题。'
+    return '感谢您的分享，我们的对话评估即将完成。'
   }
 
   // 生成抑郁指数历史数据（模拟过去30天的数据）
@@ -437,6 +543,7 @@ export default function StudentAIAssessment() {
   const startConversation = async (mode: 'text' | 'voice') => {
     setConversationMode(mode)
     setCurrentStep('conversation')
+    setShowManualRedirect(false) // 重置跳转状态
     
     try {
       // 调用后端API创建评估
@@ -455,24 +562,22 @@ export default function StudentAIAssessment() {
       }
       setMessages([welcomeMessage])
       
-      // 开始引导式对话 - 调用AI生成个性化开场
+      // 为评估创建AI会话（不生成额外的开场消息）
       setTimeout(async () => {
         try {
-          // 为评估创建AI会话
+          // 为评估创建AI会话，但不添加额外的AI消息
           const startData = await api.ai.startSession({ 
             problem_type: 'AI智能评估对话', 
-            initial_message: '我需要开始一个心理健康评估对话，请给出一个温和的开场问题' 
+            initial_message: '用户已准备好开始心理健康评估对话' 
           })
           setAssessmentSessionId(startData.session_id)
           
-          // 使用AI生成的开场消息，如果没有则使用默认
-          const openingQuestion = startData.message || '首先，能告诉我您最近的心情怎么样吗？有什么特别的感受或困扰吗？'
-          addAIMessage(openingQuestion)
+          // 不添加额外的AI消息，只使用前面的欢迎语
+          console.log('AI会话已创建，会话ID:', startData.session_id)
           
         } catch (error) {
           console.error('创建AI评估会话失败:', error)
-          // 使用默认开场问题
-          addAIMessage('首先，能告诉我您最近的心情怎么样吗？有什么特别的感受或困扰吗？')
+          // 不添加额外消息，用户可以直接开始对话
         }
       }, 1000)
       
@@ -508,7 +613,9 @@ export default function StudentAIAssessment() {
 
   // 处理文本输入
   const handleTextSubmit = async () => {
-    if (!currentInput.trim() || !currentAssessmentId) return
+    if (!currentInput.trim() || isAIResponding) return
+    
+    setIsAIResponding(true)
     
     const userMessage = {
       id: Date.now().toString(),
@@ -521,64 +628,160 @@ export default function StudentAIAssessment() {
     setCurrentInput('')
     
     try {
-      // 提交用户回答到后端（如果API格式有问题，不影响AI对话）
-      try {
-        await api.student.submitAnswer(currentAssessmentId, {
-          question_id: `conversation_${Date.now()}`,
-          answer: inputContent
-        })
-        console.log('✅ 答案提交成功')
-      } catch (submitError) {
-        console.warn('⚠️ 答案提交格式问题，但不影响AI对话:', submitError)
+      // 提交用户回答到后端（如果没有评估ID或API格式有问题，不影响AI对话）
+      if (currentAssessmentId) {
+        try {
+          await api.student.submitAnswer(currentAssessmentId, {
+            question_id: `conversation_${Date.now()}`,
+            answer: inputContent
+          })
+          console.log('✅ 答案提交成功')
+        } catch (submitError) {
+          console.warn('⚠️ 答案提交格式问题，但不影响AI对话:', submitError)
+        }
+      } else {
+        console.log('ℹ️ 没有评估ID，跳过答案提交，但AI对话正常进行')
       }
       
       // 调用真实的AI对话API生成回复
       try {
+        let currentSessionId = assessmentSessionId
+        
         // 如果没有AI会话，先创建一个
-        if (!assessmentSessionId) {
+        if (!currentSessionId) {
           console.log('🚀 为评估创建AI会话...')
           const startData = await api.ai.startSession({ 
             problem_type: 'AI智能评估对话', 
             initial_message: null 
           })
-          setAssessmentSessionId(startData.session_id)
-          console.log('✅ 评估AI会话创建成功:', startData.session_id)
+          currentSessionId = startData.session_id
+          setAssessmentSessionId(currentSessionId)
+          console.log('✅ 评估AI会话创建成功:', currentSessionId)
         }
         
         // 调用AI对话API
-        console.log('💬 发送用户输入到AI评估服务...')
+        console.log('💬 发送用户输入到AI评估服务，会话ID:', currentSessionId)
         const chatData = await api.ai.chat({ 
-          session_id: assessmentSessionId!, 
+          session_id: currentSessionId, 
           message: inputContent 
         })
+        
+        console.log('📦 完整API响应:', JSON.stringify(chatData, null, 2))
         
         const aiResponse = chatData.message || '谢谢您的分享，请继续告诉我更多。'
         console.log('✅ 收到AI评估回复:', aiResponse.slice(0, 50) + '...')
         
-        // 智能分析用户回答
+        // 智能分析用户回答并存储
         const emotionData = chatData.emotion_analysis
-        const updatedProgress = analyzeUserResponse(inputContent, emotionData)
+        const riskData = chatData.risk_assessment
+        console.log('🧠 收到的情绪分析数据:', JSON.stringify(emotionData, null, 2))
+        console.log('⚠️ 收到的风险评估数据:', JSON.stringify(riskData, null, 2))
         
-        // 添加AI回复
-        setTimeout(() => {
-          addAIMessage(aiResponse)
+        // 先调用分析函数，但不让它更新情绪状态（因为我们要用EasyBert的结果）
+        const updatedProgress = analyzeUserResponse(inputContent, emotionData, false)
+        
+        // 然后立即更新情绪显示和风险等级（优先级更高）
+        if (emotionData && emotionData.dominant_emotion) {
+          const emotionMapping: Record<string, string> = {
+            'sadness': '悲伤',
+            'anxiety': '焦虑',
+            'anger': '愤怒',
+            'happiness': '开心',
+            'neutral': '平稳',
+            'depression': '抑郁',
+            'positive': '开心',
+            'negative': '悲伤'
+          }
           
-          // 生成下一个智能问题
-          setTimeout(() => {
-            const nextQuestion = generateNextQuestion(updatedProgress)
-            if (nextQuestion === null) {
-              // 进入问卷阶段
-              addAIMessage('非常感谢您诚实的分享。根据我们的对话，我对您的情况有了初步了解。现在让我们进入一些标准化的评估问题，这将帮助我更准确地评估您的心理状态。')
-              setTimeout(() => setCurrentStep('questions'), 2000)
-            } else if (nextQuestion) {
-              // 继续智能评估对话
-              addAIMessage(nextQuestion)
+          const chineseEmotion = emotionMapping[emotionData.dominant_emotion] || emotionData.dominant_emotion
+          console.log('🎨 强制更新情绪显示:', emotionData.dominant_emotion, '->', chineseEmotion)
+          
+          // 获取后端风险评估结果
+          const backendRiskLevel = chatData.risk_assessment?.risk_level || 'low'
+          console.log('⚠️ 后端返回风险等级:', backendRiskLevel)
+          console.log('⚠️ 完整风险数据:', chatData.risk_assessment)
+          
+          // 立即更新状态，不使用setTimeout
+          setEmotionTrend(prev => {
+            console.log('🔄 立即更新状态:', {
+              before: { emotion: prev.currentDominant, risk: prev.riskLevel },
+              after: { emotion: chineseEmotion, risk: backendRiskLevel }
+            })
+            return {
+              ...prev,
+              currentDominant: chineseEmotion,
+              riskLevel: backendRiskLevel as 'low' | 'medium' | 'high'
             }
-          }, 1500)
-        }, 800)
+          })
+        }
+        
+        // 存储用户回答
+        const lastAIMessage = messages[messages.length - 1]?.content || '问题'
+        setAssessmentProgress(prev => ({
+          ...prev,
+          answeredQuestions: [...prev.answeredQuestions, {
+            question: lastAIMessage,
+            answer: inputContent,
+            emotion_analysis: emotionData,
+            timestamp: new Date()
+          }]
+        }))
+        
+        // 检查是否有跳转指令
+        if (chatData.redirect_action && chatData.redirect_action.type === 'complete_assessment') {
+          // AI发送了评估完成指令，显示完成消息
+          setTimeout(() => {
+            addAIMessage(aiResponse)
+            setIsAIResponding(false)
+            
+            // 显示评估完成提示，但不自动跳转
+            setTimeout(async () => {
+              // 先完成AI评估，保存结果
+              await completeAssessment()
+              
+              // 保存AI评估结果到localStorage，供传统量表页面使用
+              const aiAssessmentData = {
+                session_id: currentSessionId,
+                emotion_trend: emotionTrend,
+                assessment_progress: assessmentProgress,
+                conversation_count: chatData.redirect_action?.conversation_count || 0,
+                completion_reason: chatData.redirect_action?.reason || 'assessment_complete',
+                timestamp: new Date().toISOString()
+              }
+              
+              localStorage.setItem('ai_assessment_completed', 'true')
+              localStorage.setItem('ai_assessment_result', JSON.stringify(aiAssessmentData))
+              localStorage.setItem('ai_assessment_session_id', currentSessionId || '')
+              
+              console.log('✅ AI评估结果已保存到localStorage:', aiAssessmentData)
+              
+              // 显示手动跳转提示
+              const completionMessage = `🎉 **AI对话评估已完成！**\n\n✅ 已收集到足够的心理状态信息\n📊 对话轮数：${chatData.redirect_action?.conversation_count || 0}轮\n💾 评估数据已保存\n\n📋 **下一步：** 请点击下方按钮继续进行传统量表评估，完成后将生成综合心理评估报告。`
+              addAIMessage(completionMessage)
+              
+              // 显示手动跳转按钮
+              setShowManualRedirect(true)
+            }, 1000)
+          }, 800)
+        } else {
+          // 正常的对话流程
+          setTimeout(() => {
+            addAIMessage(aiResponse)
+            setIsAIResponding(false)
+            
+            // 生成下一个智能问题
+            setTimeout(() => {
+              const nextQuestion = generateNextQuestion(updatedProgress)
+              if (nextQuestion) {
+                addAIMessage(nextQuestion)
+              }
+            }, 1500)
+          }, 800)
+        }
         
       } catch (aiError) {
         console.error('AI评估对话失败:', aiError)
+        setIsAIResponding(false)
         // 如果AI调用失败，使用备用回复
         setTimeout(() => {
           const responses = [
@@ -599,6 +802,8 @@ export default function StudentAIAssessment() {
     } catch (error) {
       console.error('提交答案失败:', error)
       addAIMessage('抱歉，我遇到了一些技术问题。请您重新说一遍好吗？')
+    } finally {
+      setIsAIResponding(false)
     }
   }
 
@@ -733,6 +938,15 @@ export default function StudentAIAssessment() {
       // 调用后端API完成评估并获取AI分析结果
       const result = await api.student.completeAssessment(currentAssessmentId)
       
+      // 保存AI评估会话ID到localStorage，供后续综合评估使用
+      if (result.ai_session_id || assessmentSessionId) {
+        const sessionId = result.ai_session_id || assessmentSessionId
+        if (sessionId) {
+          localStorage.setItem('ai_assessment_session_id', sessionId)
+        }
+        setCurrentAISessionId(sessionId)
+      }
+      
       // 使用智能评估收集的数据计算最终结果
       const phq9Total = Object.values(assessmentProgress.phq9).reduce((sum, score) => sum + score, 0)
       const gad7Total = Object.values(assessmentProgress.gad7).reduce((sum, score) => sum + score, 0)
@@ -776,6 +990,10 @@ export default function StudentAIAssessment() {
       setAssessmentResult(frontendResult)
       setCurrentStep('result')
       
+      // 标记AI评估已完成，准备跳转到传统量表
+      localStorage.setItem('ai_assessment_completed', 'true')
+      localStorage.setItem('ai_assessment_result', JSON.stringify(frontendResult))
+      
     } catch (error) {
       console.error('完成评估失败:', error)
       
@@ -818,6 +1036,95 @@ export default function StudentAIAssessment() {
       console.log('反馈已提交:', { accurate, userId: userInfo?.username })
     } catch (error) {
       console.error('提交反馈失败:', error)
+    }
+  }
+
+  // 检查综合评估准备状态
+  const checkComprehensiveAssessmentReadiness = async (sessionId: string) => {
+    try {
+      const readiness = await api.comprehensiveAssessment.checkReadiness(sessionId)
+      setAssessmentReadiness(readiness)
+      
+      // 获取可用量表
+      const scales = await api.comprehensiveAssessment.getAvailableScales()
+      setAvailableScales(scales)
+      
+      // 根据推荐自动选择量表
+      if (readiness.scale_recommendations) {
+        const recommendedScales = readiness.scale_recommendations
+          .filter(rec => rec.priority === 'high')
+          .map(rec => rec.scale_name)
+        setSelectedScales(recommendedScales)
+      }
+      
+    } catch (error) {
+      console.error('检查综合评估准备状态失败:', error)
+    }
+  }
+
+  // 生成综合评估报告
+  const generateComprehensiveReport = async () => {
+    if (!currentAISessionId && !assessmentSessionId) return
+
+    setIsGeneratingComprehensive(true)
+    
+    try {
+      // 构建量表结果
+      const scaleData: Record<string, any> = {}
+      selectedScales.forEach(scaleName => {
+        if (scaleResults[scaleName]) {
+          scaleData[scaleName] = scaleResults[scaleName]
+        }
+      })
+
+      // 使用AI会话ID或评估会话ID
+      const sessionId = currentAISessionId || assessmentSessionId || `assessment_${currentAssessmentId}`
+
+      // 调用综合评估API
+      const response = await api.comprehensiveAssessment.create({
+        session_id: sessionId,
+        scale_results: Object.keys(scaleData).length > 0 ? scaleData : undefined,
+        include_conversation: true
+      })
+
+      setComprehensiveReport(response)
+      setCurrentStep('comprehensive-results' as any)
+      
+    } catch (error) {
+      console.error('生成综合评估报告失败:', error)
+    } finally {
+      setIsGeneratingComprehensive(false)
+    }
+  }
+
+  // 提交量表结果
+  const submitScaleResults = async (scaleName: string, results: any) => {
+    try {
+      const sessionId = currentAISessionId || assessmentSessionId || `assessment_${currentAssessmentId}`
+      if (!sessionId) return
+
+      const scaleData = {
+        [scaleName]: {
+          total_score: results.total_score,
+          items: results.items || [],
+          completion_time: new Date().toISOString(),
+          max_score: results.max_score || 27
+        }
+      }
+
+      await api.comprehensiveAssessment.submitScales({
+        session_id: sessionId,
+        scale_results: scaleData
+      })
+
+      // 更新本地状态
+      setScaleResults(prev => ({
+        ...prev,
+        [scaleName]: scaleData[scaleName]
+      }))
+
+    } catch (error) {
+      console.error('提交量表结果失败:', error)
     }
   }
 
@@ -917,7 +1224,9 @@ export default function StudentAIAssessment() {
                           风险等级: {emotionTrend.riskLevel === 'high' ? '高' : 
                                     emotionTrend.riskLevel === 'medium' ? '中' : '低'}
                         </span>
-                        <span>已评估: {Object.keys(assessmentProgress.phq9).length + Object.keys(assessmentProgress.gad7).length}/16项</span>
+                        <span className="bg-white bg-opacity-20 px-2 py-1 rounded text-xs">
+                          已评估: {Math.min(assessmentProgress.answeredQuestions.length, assessmentProgress.totalQuestions)}/{assessmentProgress.totalQuestions}项
+                        </span>
                       </div>
               </div>
             </div>
@@ -955,7 +1264,12 @@ export default function StudentAIAssessment() {
                     ? 'bg-blue-600 text-white'
                     : 'bg-gray-100 text-gray-900'
                     }`}>
-                      <p className="text-sm">{message.content}</p>
+                      <div 
+                        className="text-sm"
+                        dangerouslySetInnerHTML={{
+                          __html: formatMarkdown(message.content)
+                        }}
+                      />
                       <p className={`text-xs mt-2 ${
                         message.type === 'user' ? 'text-blue-100' : 'text-gray-500'
                 }`}>
@@ -964,12 +1278,59 @@ export default function StudentAIAssessment() {
               </div>
                   </motion.div>
           ))}
+                
+                {/* AI正在回复的加载提示 */}
+                {isAIResponding && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex justify-start"
+                  >
+                    <div className="max-w-xs lg:max-w-md px-4 py-3 rounded-2xl bg-gray-100 text-gray-900">
+                      <div className="flex items-center space-x-2">
+                        <div className="flex space-x-1">
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                        </div>
+                        <span className="text-sm text-gray-500">AI正在思考中...</span>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+                
                 <div ref={messagesEndRef} />
         </div>
 
+        {/* 手动跳转按钮 */}
+        {showManualRedirect && (
+          <div className="border-t bg-gradient-to-r from-blue-50 to-green-50 p-4">
+            <div className="flex items-center justify-center space-x-4">
+              <div className="flex items-center space-x-2 text-blue-700">
+                <FileText className="w-5 h-5" />
+                <span className="font-medium">AI评估已完成</span>
+              </div>
+              <button
+                onClick={() => router.push('/student/assessment')}
+                className="bg-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-blue-700 transition-colors flex items-center space-x-2 shadow-md"
+              >
+                <FileText className="w-4 h-4" />
+                <span>继续传统量表评估</span>
+              </button>
+              <button
+                onClick={() => setCurrentStep('result')}
+                className="bg-green-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-green-700 transition-colors flex items-center space-x-2 shadow-md"
+              >
+                <BarChart3 className="w-4 h-4" />
+                <span>查看AI评估结果</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* 输入区域 */}
         <div className="border-t p-4">
-                {conversationMode === 'text' ? (
+                {!showManualRedirect && conversationMode === 'text' ? (
                   <div className="flex items-center space-x-4">
               <input
                 type="text"
@@ -981,13 +1342,13 @@ export default function StudentAIAssessment() {
               />
               <button
                       onClick={handleTextSubmit}
-                      disabled={!currentInput.trim()}
-                      className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-50"
+                      disabled={!currentInput.trim() || isAIResponding}
+                      className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                发送
+                {isAIResponding ? '发送中...' : '发送'}
               </button>
             </div>
-          ) : (
+          ) : !showManualRedirect ? (
                   <div className="space-y-3">
                     {/* 语音识别状态提示 */}
                     {isListening && (
@@ -1031,14 +1392,14 @@ export default function StudentAIAssessment() {
                       {/* 发送按钮 */}
                       <button
                         onClick={handleTextSubmit}
-                        disabled={!currentInput.trim() || isListening}
+                        disabled={!currentInput.trim() || isListening || isAIResponding}
                         className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        发送
+                        {isAIResponding ? '发送中...' : '发送'}
                       </button>
                     </div>
                   </div>
-          )}
+          ) : null}
         </div>
             </div>
           </div>
@@ -1494,6 +1855,83 @@ export default function StudentAIAssessment() {
           </div>
                 </motion.div>
 
+                {/* 下一步：传统量表评估 */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.6 }}
+                  className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6"
+                >
+                  <div className="flex items-center space-x-3 mb-4">
+                    <FileText className="w-6 h-6 text-blue-600" />
+                    <h2 className="text-xl font-semibold text-blue-900">📋 第二步：标准化量表评估</h2>
+                  </div>
+                  
+                  <p className="text-blue-800 mb-4">
+                    AI对话评估已完成！现在请进行标准化心理量表测试，
+                    完成后系统将结合两个评估结果为您生成综合心理评估报告。
+                  </p>
+                  
+                  <div className="bg-white rounded-xl p-4 mb-4">
+                    <h3 className="font-semibold text-gray-900 mb-2">🎯 评估流程：</h3>
+                    <ul className="space-y-2 text-sm text-gray-700">
+                      <li className="flex items-center space-x-2">
+                        <CheckCircle className="w-4 h-4 text-green-600" />
+                        <span>✅ AI对话评估（已完成）</span>
+                      </li>
+                      <li className="flex items-center space-x-2">
+                        <FileText className="w-4 h-4 text-blue-600" />
+                        <span>📊 标准化量表评估（进行中）</span>
+                      </li>
+                      <li className="flex items-center space-x-2">
+                        <Brain className="w-4 h-4 text-purple-600" />
+                        <span>🔗 综合评估报告（待生成）</span>
+                      </li>
+                    </ul>
+                  </div>
+                  
+                  <div className="flex space-x-4">
+                    <button
+                      onClick={() => router.push('/student/assessment')}
+                      className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
+                    >
+                      <FileText className="w-5 h-5" />
+                      <span>开始传统量表评估</span>
+                    </button>
+                    
+                    <button
+                      onClick={() => setCurrentStep('intro')}
+                      className="px-6 py-3 border border-gray-300 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      重新开始
+                    </button>
+                  </div>
+                  
+                  <div className="mt-4 space-y-3">
+                    <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <p className="text-sm text-yellow-800">
+                        💡 <strong>提示：</strong>完成传统量表后，系统会自动结合AI对话分析结果，
+                        为您生成更准确的综合心理评估报告。
+                      </p>
+                    </div>
+                    
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle className="w-4 h-4 text-green-600" />
+                        <span className="text-sm font-medium text-blue-800">第一步：AI对话评估已完成</span>
+                      </div>
+                      <div className="flex items-center space-x-2 mt-1">
+                        <Clock className="w-4 h-4 text-blue-600" />
+                        <span className="text-sm text-blue-700">第二步：进行传统量表评估（约5-10分钟）</span>
+                      </div>
+                      <div className="flex items-center space-x-2 mt-1">
+                        <Brain className="w-4 h-4 text-purple-600" />
+                        <span className="text-sm text-blue-700">第三步：生成综合评估报告</span>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+
                 {/* 反馈区域 */}
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
@@ -1571,6 +2009,208 @@ export default function StudentAIAssessment() {
               </>
             )}
         </div>
+        )}
+
+        {/* 综合评估选项页面 */}
+        {currentStep === 'comprehensive-options' && (
+          <div className="max-w-4xl mx-auto space-y-6">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-2xl shadow-sm border p-6"
+            >
+              <div className="flex items-center space-x-3 mb-6">
+                <Brain className="w-8 h-8 text-blue-600" />
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-900">综合心理评估</h1>
+                  <p className="text-gray-600">结合AI对话分析和标准量表，为您提供全面的心理健康评估</p>
+                </div>
+              </div>
+
+              {/* 推荐量表 */}
+              <div className="mb-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">📋 推荐量表</h2>
+                <p className="text-gray-600 mb-4">基于您的对话内容，我们推荐以下标准化量表：</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {availableScales.slice(0, 4).map((scale) => (
+                    <div key={scale.scale_name} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-medium text-gray-900">{scale.scale_name}</h3>
+                        <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                          {scale.time_required}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600 mb-2">{scale.description}</p>
+                      <p className="text-xs text-gray-500">{scale.item_count}题 | {scale.score_range}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 生成报告按钮 */}
+              <div className="flex space-x-4">
+                <button
+                  onClick={generateComprehensiveReport}
+                  disabled={isGeneratingComprehensive}
+                  className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                >
+                  {isGeneratingComprehensive ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      <span>生成中...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="w-5 h-5" />
+                      <span>生成综合评估报告</span>
+                    </>
+                  )}
+                </button>
+                
+                <button
+                  onClick={() => setCurrentStep('result')}
+                  className="px-6 py-3 border border-gray-300 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  返回基础报告
+                </button>
+              </div>
+
+              <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-sm text-yellow-800">
+                  💡 <strong>提示：</strong>您可以直接生成基于AI对话的综合评估报告，
+                  或稍后完成推荐的标准量表后获得更精确的评估结果。
+                </p>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* 综合评估结果页面 */}
+        {currentStep === 'comprehensive-results' && comprehensiveReport && (
+          <div className="max-w-5xl mx-auto space-y-6">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6"
+            >
+              <div className="flex items-center space-x-3 mb-4">
+                <Brain className="w-8 h-8 text-blue-600" />
+                <div>
+                  <h1 className="text-2xl font-bold text-blue-900">🎯 综合心理评估报告</h1>
+                  <p className="text-blue-700">基于AI对话分析和标准量表的全面评估</p>
+                </div>
+              </div>
+              
+              <div className="bg-white rounded-xl p-4">
+                <p className="text-gray-800 leading-relaxed">
+                  {comprehensiveReport.assessment_report.executive_summary}
+                </p>
+              </div>
+            </motion.div>
+
+            {/* 整体评估 */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="bg-white rounded-2xl shadow-sm border p-6"
+            >
+              <h2 className="text-xl font-semibold text-gray-900 mb-4">📊 整体评估结果</h2>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className={`p-4 rounded-xl ${
+                  comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? 'bg-green-50 border border-green-200' :
+                  comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? 'bg-yellow-50 border border-yellow-200' :
+                  'bg-red-50 border border-red-200'
+                }`}>
+                  <h3 className="font-semibold text-gray-900 mb-2">风险等级</h3>
+                  <p className={`text-lg font-bold ${
+                    comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? 'text-green-700' :
+                    comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? 'text-yellow-700' :
+                    'text-red-700'
+                  }`}>
+                    {comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? '低风险' :
+                     comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? '中等风险' : '高风险'}
+                  </p>
+                </div>
+
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                  <h3 className="font-semibold text-gray-900 mb-2">主导情绪</h3>
+                  <p className="text-lg font-bold text-blue-700">
+                    {comprehensiveReport.assessment_report.overall_assessment.dominant_emotion === 'positive' ? '积极' :
+                     comprehensiveReport.assessment_report.overall_assessment.dominant_emotion === 'negative' ? '消极' : '平稳'}
+                  </p>
+                </div>
+
+                <div className="p-4 bg-purple-50 border border-purple-200 rounded-xl">
+                  <h3 className="font-semibold text-gray-900 mb-2">评估可靠性</h3>
+                  <p className="text-lg font-bold text-purple-700">
+                    {comprehensiveReport.assessment_report.overall_assessment.assessment_reliability === 'high' ? '高' :
+                     comprehensiveReport.assessment_report.overall_assessment.assessment_reliability === 'medium' ? '中等' : '较低'}
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* 即时建议 */}
+            {comprehensiveReport.assessment_report.recommendations.immediate_actions.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className={`rounded-2xl p-6 ${
+                  comprehensiveReport.assessment_report.overall_assessment.risk_level === 'high' 
+                    ? 'bg-red-50 border border-red-200' 
+                    : 'bg-blue-50 border border-blue-200'
+                }`}
+              >
+                <h2 className="text-xl font-semibold text-gray-900 mb-4">⚡ 即时建议</h2>
+                <div className="space-y-3">
+                  {comprehensiveReport.assessment_report.recommendations.immediate_actions.map((action, index) => (
+                    <div key={index} className="flex items-start space-x-3">
+                      <AlertTriangle className={`w-5 h-5 mt-0.5 ${
+                        comprehensiveReport.assessment_report.overall_assessment.risk_level === 'high' 
+                          ? 'text-red-600' 
+                          : 'text-blue-600'
+                      }`} />
+                      <span className={
+                        comprehensiveReport.assessment_report.overall_assessment.risk_level === 'high' 
+                          ? 'text-red-800' 
+                          : 'text-blue-800'
+                      }>
+                        {action}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+
+            {/* 返回按钮 */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="bg-white rounded-2xl shadow-sm border p-6"
+            >
+              <div className="flex space-x-4">
+                <button
+                  onClick={() => setCurrentStep('result')}
+                  className="px-6 py-3 border border-gray-300 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  返回基础评估
+                </button>
+                
+                <button
+                  onClick={() => setCurrentStep('intro')}
+                  className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-blue-700 transition-colors"
+                >
+                  开始新的评估
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </DashboardLayout>
     </RequireRole>

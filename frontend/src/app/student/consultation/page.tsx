@@ -526,8 +526,8 @@ export default function ConsultationPage() {
                         <h4 className="font-medium text-blue-900 mb-2">预约确认</h4>
                         <p className="text-blue-700 mb-4">
                           您选择了 <span className="font-medium">{selectedCounselor.name}</span> 的 
-                          <span className="font-medium">{slot.date} {slot.time}</span> 
-                          <span className="font-medium">{getTypeText(slot.type)}</span> 咨询
+                          <span className="font-medium">{selectedSlot?.date} {selectedSlot?.time}</span> 
+                          <span className="font-medium">{selectedSlot && getTypeText(selectedSlot.type)}</span> 咨询
                         </p>
                         <button
                           onClick={handleBookAppointment}

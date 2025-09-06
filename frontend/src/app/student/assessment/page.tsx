@@ -20,11 +20,12 @@ import {
 import { useRouter } from 'next/navigation'
 import DashboardLayout from '@/components/DashboardLayout'
 import { RequireRole } from '@/components/AuthGuard'
+import { api, type ComprehensiveAssessmentResponse } from '@/lib'
 
 interface AssessmentQuestion {
   id: number
   question: string
-  category: string
+  category: 'depression' | 'anxiety' | 'stress'
   options: {
     value: number
     label: string
@@ -36,8 +37,9 @@ interface AssessmentResult {
   overallScore: number
   categories: {
     name: string
-    score: number
-    level: 'low' | 'medium' | 'high'
+    rawScore: number
+    standardScore: number
+    level: 'normal' | 'mild' | 'moderate' | 'severe' | 'extremely_severe'
     description: string
     suggestions: string[]
   }[]
@@ -63,6 +65,27 @@ const getRiskLabel = (risk: 'low' | 'medium' | 'high') => {
   }
 }
 
+// DASS-21等级样式和标签工具函数
+const getDassLevelColor = (level: 'normal' | 'mild' | 'moderate' | 'severe' | 'extremely_severe') => {
+  switch (level) {
+    case 'normal': return 'bg-green-100 text-green-800'
+    case 'mild': return 'bg-blue-100 text-blue-800'
+    case 'moderate': return 'bg-yellow-100 text-yellow-800'
+    case 'severe': return 'bg-orange-100 text-orange-800'
+    case 'extremely_severe': return 'bg-red-100 text-red-800'
+  }
+}
+
+const getDassLevelLabel = (level: 'normal' | 'mild' | 'moderate' | 'severe' | 'extremely_severe') => {
+  switch (level) {
+    case 'normal': return '正常范围'
+    case 'mild': return '轻度'
+    case 'moderate': return '中度'
+    case 'severe': return '重度'
+    case 'extremely_severe': return '极重度'
+  }
+}
+
 export default function AssessmentPage() {
   const [currentStep, setCurrentStep] = useState(0)
   const [answers, setAnswers] = useState<Record<number, number>>({})
@@ -71,69 +94,164 @@ export default function AssessmentPage() {
   // 新增：存储报告反馈状态
   const [reportFeedback, setReportFeedback] = useState<boolean | null>(null)
   const router = useRouter()
+  
+  // AI评估相关状态
+  const [hasAIAssessment, setHasAIAssessment] = useState(false)
+  const [aiAssessmentResult, setAIAssessmentResult] = useState<any>(null)
+  const [aiSessionId, setAISessionId] = useState<string | null>(null)
+  const [isGeneratingComprehensive, setIsGeneratingComprehensive] = useState(false)
+  const [comprehensiveReport, setComprehensiveReport] = useState<ComprehensiveAssessmentResponse | null>(null)
+  const [showComprehensiveReport, setShowComprehensiveReport] = useState(false)
 
-  // 评估问题数据
-  const questions: AssessmentQuestion[] = [
-    {
-      id: 1,
-      question: "最近一周，您感到焦虑或紧张的程度如何？",
-      category: "焦虑",
-      options: [
-        { value: 1, label: "完全没有", description: "感觉平静放松" },
-        { value: 2, label: "轻微", description: "偶尔感到轻微紧张" },
-        { value: 3, label: "中等", description: "经常感到焦虑" },
-        { value: 4, label: "严重", description: "持续感到强烈焦虑" },
-        { value: 5, label: "极度", description: "焦虑严重影响生活" }
-      ]
-    },
-    {
-      id: 2,
-      question: "您对日常活动的兴趣和愉悦感如何？",
-      category: "抑郁",
-      options: [
-        { value: 1, label: "完全正常", description: "享受各种活动" },
-        { value: 2, label: "轻微减少", description: "兴趣略有下降" },
-        { value: 3, label: "明显减少", description: "对大多数活动失去兴趣" },
-        { value: 4, label: "显著减少", description: "几乎对所有活动失去兴趣" },
-        { value: 5, label: "完全失去", description: "完全无法感受快乐" }
-      ]
-    },
-    {
-      id: 3,
-      question: "您的睡眠质量如何？",
-      category: "睡眠",
-      options: [
-        { value: 1, label: "很好", description: "睡眠充足质量高" },
-        { value: 2, label: "良好", description: "睡眠基本正常" },
-        { value: 3, label: "一般", description: "偶尔失眠或质量一般" },
-        { value: 4, label: "较差", description: "经常失眠或质量差" },
-        { value: 5, label: "很差", description: "严重失眠或质量极差" }
-      ]
-    },
-    {
-      id: 4,
-      question: "您处理压力的能力如何？",
-      category: "压力管理",
-      options: [
-        { value: 1, label: "很强", description: "能很好应对压力" },
-        { value: 2, label: "较强", description: "通常能处理压力" },
-        { value: 3, label: "一般", description: "压力处理能力中等" },
-        { value: 4, label: "较弱", description: "压力处理能力较差" },
-        { value: 5, label: "很弱", description: "难以应对压力" }
-      ]
-    },
-    {
-      id: 5,
-      question: "您的人际关系满意度如何？",
-      category: "人际关系",
-      options: [
-        { value: 1, label: "很满意", description: "人际关系和谐" },
-        { value: 2, label: "满意", description: "人际关系良好" },
-        { value: 3, label: "一般", description: "人际关系一般" },
-        { value: 4, label: "不满意", description: "人际关系较差" },
-        { value: 5, label: "很不满意", description: "人际关系紧张" }
-      ]
+  // DASS-21评估问题数据
+  // 检查是否有AI评估结果
+  useEffect(() => {
+    const aiCompleted = localStorage.getItem('ai_assessment_completed')
+    const aiResult = localStorage.getItem('ai_assessment_result')
+    const sessionId = localStorage.getItem('ai_assessment_session_id')
+    
+    if (aiCompleted === 'true' && aiResult && sessionId) {
+      setHasAIAssessment(true)
+      const parsedResult = JSON.parse(aiResult)
+      setAIAssessmentResult(parsedResult)
+      setAISessionId(sessionId)
+      console.log('✅ 检测到AI评估结果:', parsedResult)
+      
+      // 显示AI评估完成提示
+      console.log('🎯 AI评估已完成，当前情绪:', parsedResult.emotion_trend?.currentDominant)
+      console.log('⚠️ AI评估风险等级:', parsedResult.emotion_trend?.riskLevel)
+      console.log('💬 对话轮数:', parsedResult.conversation_count)
     }
+  }, [])
+
+  const questions: AssessmentQuestion[] = [
+    // 抑郁维度问题
+    { id: 1, question: "我感到情绪低落和沮丧", category: "depression", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 2, question: "我感到神经过敏和紧张", category: "anxiety", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 3, question: "我感到难以容忍任何阻碍我前进的事情", category: "stress", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 4, question: "我对平时喜欢的事情提不起兴趣", category: "depression", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 5, question: "我感到一阵阵头晕", category: "anxiety", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 6, question: "我感到易怒且容易被激怒", category: "stress", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 7, question: "我觉得自己是个失败者", category: "depression", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 8, question: "我感到心跳得很厉害", category: "anxiety", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 9, question: "我感到难以放松", category: "stress", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 10, question: "我感到做任何事都很费力", category: "depression", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 11, question: "我感到紧张不安，无法放松", category: "anxiety", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 12, question: "我感到无法应对生活中的压力", category: "stress", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 13, question: "我对自己感到失望", category: "depression", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 14, question: "我感到莫名的恐惧", category: "anxiety", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 15, question: "我感到自己快要崩溃了", category: "stress", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 16, question: "我感到前途渺茫", category: "depression", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 17, question: "我感到难以呼吸", category: "anxiety", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 18, question: "我感到过度警觉", category: "stress", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 19, question: "我觉得自己毫无价值", category: "depression", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 20, question: "我感到害怕", category: "anxiety", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]},
+    { id: 21, question: "我感到很难冷静下来", category: "stress", options: [
+      { value: 0, label: "从不", description: "完全没有这种感受" },
+      { value: 1, label: "有时", description: "偶尔会有这种感受" },
+      { value: 2, label: "经常", description: "经常会有这种感受" },
+      { value: 3, label: "总是", description: "几乎总是有这种感受" }
+    ]}
   ]
 
   // 用户权限验证
@@ -167,9 +285,10 @@ export default function AssessmentPage() {
       reportFeedback: reportFeedback === true ? '符合' : reportFeedback === false ? '不符合' : '未反馈',
       categoryDetails: result.categories.map(cat => ({
         name: cat.name,
-        score: cat.score,
+        rawScore: cat.rawScore,
+        standardScore: cat.standardScore,
         level: cat.level,
-        levelLabel: getRiskLabel(cat.level as 'low' | 'medium' | 'high'),
+        levelLabel: getDassLevelLabel(cat.level),
         description: cat.description,
         suggestions: cat.suggestions
       })),
@@ -194,7 +313,7 @@ export default function AssessmentPage() {
 
   // 答案处理
   const handleAnswer = (questionId: number, value: number) => {
-    if (value < 1 || value > 5) {
+    if (value < 0 || value > 3) {
       console.error('无效的答案值:', value)
       return
     }
@@ -213,9 +332,9 @@ export default function AssessmentPage() {
       setCurrentStep(currentStep - 1)
     }
   }
-
+ 
   // 完成评估处理
-  const handleComplete = () => {
+  const handleComplete = async () => {
     const unansweredQuestions = questions.filter(q => answers[q.id] === undefined)
     
     if (unansweredQuestions.length > 0) {
@@ -234,9 +353,82 @@ export default function AssessmentPage() {
       
       setResult(mockResult)
       setIsCompleted(true)
+      
+      // 如果有AI评估结果，自动生成综合报告
+      if (hasAIAssessment && aiSessionId) {
+        await generateComprehensiveReport(mockResult)
+      }
     } catch (error) {
       console.error('生成评估结果时出错:', error)
       alert('生成评估结果时出现错误，请重试。')
+    }
+  }
+
+  // 生成综合评估报告
+  const generateComprehensiveReport = async (scaleResult: AssessmentResult) => {
+    if (!aiSessionId) return
+
+    setIsGeneratingComprehensive(true)
+    
+    try {
+      console.log('🎯 开始生成综合评估报告...')
+      console.log('AI评估数据:', aiAssessmentResult)
+      console.log('量表评估数据:', scaleResult)
+      
+      // 构建量表结果数据
+      const scaleData = {
+        "DASS-21": {
+          total_score: scaleResult.overallScore,
+          categories: scaleResult.categories.map(cat => ({
+            name: cat.name,
+            raw_score: cat.rawScore,
+            standard_score: cat.standardScore,
+            level: cat.level
+          })),
+          completion_time: new Date().toISOString(),
+          risk_level: scaleResult.riskLevel
+        }
+      }
+
+      // 构建AI评估数据
+      const aiData = aiAssessmentResult ? {
+        emotion_trend: aiAssessmentResult.emotion_trend,
+        assessment_progress: aiAssessmentResult.assessment_progress,
+        conversation_count: aiAssessmentResult.conversation_count,
+        completion_reason: aiAssessmentResult.completion_reason,
+        timestamp: aiAssessmentResult.timestamp
+      } : null
+
+      console.log('📊 发送综合评估数据:', {
+        session_id: aiSessionId,
+        scale_results: scaleData,
+        ai_assessment: aiData,
+        include_conversation: true
+      })
+
+      // 调用综合评估API
+      const response = await api.comprehensiveAssessment.create({
+        session_id: aiSessionId,
+        scale_results: scaleData,
+        ai_assessment: aiData,
+        include_conversation: true
+      })
+
+      setComprehensiveReport(response)
+      setShowComprehensiveReport(true)
+      
+      // 清理localStorage中的AI评估数据
+      localStorage.removeItem('ai_assessment_completed')
+      localStorage.removeItem('ai_assessment_result')
+      localStorage.removeItem('ai_assessment_session_id')
+      
+      console.log('✅ 综合评估报告生成完成')
+      
+    } catch (error) {
+      console.error('生成综合评估报告失败:', error)
+      // 即使综合报告失败，也显示传统评估结果
+    } finally {
+      setIsGeneratingComprehensive(false)
     }
   }
 
@@ -247,120 +439,143 @@ export default function AssessmentPage() {
     alert(isMatch ? '感谢您的认可，我们将继续优化评估服务！' : '感谢您的反馈，我们将努力改进评估准确性！')
   }
 
-  // 分数计算
-  const calculateOverallScore = () => {
-    const answeredQuestions = questions.filter(q => answers[q.id] !== undefined)
-    if (answeredQuestions.length === 0) return 0
-    const total = answeredQuestions.reduce((sum, q) => sum + (answers[q.id] || 0), 0)
-    return Math.round((total / answeredQuestions.length) * 20)
+  // DASS-21计分工具函数
+  const calculateDimensionScore = (category: 'depression' | 'anxiety' | 'stress') => {
+    const categoryQuestions = questions.filter(q => q.category === category)
+    const rawScore = categoryQuestions.reduce((sum, q) => sum + (answers[q.id] || 0), 0)
+    const standardScore = rawScore * 2  // DASS-21标准分 = 原始分 × 2
+    return { rawScore, standardScore }
   }
 
-  // 生成各维度结果
+  const getDimensionLevel = (standardScore: number, dimension: 'depression' | 'anxiety' | 'stress'): 'normal' | 'mild' | 'moderate' | 'severe' | 'extremely_severe' => {
+    const thresholds = {
+      depression: { mild: 10, moderate: 14, severe: 21, extremely_severe: 28 },
+      anxiety: { mild: 8, moderate: 10, severe: 15, extremely_severe: 20 },
+      stress: { mild: 15, moderate: 19, severe: 26, extremely_severe: 34 }
+    }
+    
+    const t = thresholds[dimension]
+    if (standardScore >= t.extremely_severe) return 'extremely_severe'
+    if (standardScore >= t.severe) return 'severe'
+    if (standardScore >= t.moderate) return 'moderate'
+    if (standardScore >= t.mild) return 'mild'
+    return 'normal'
+  }
+
+  // 总体分数计算（用于风险评估）
+  const calculateOverallScore = () => {
+    const depression = calculateDimensionScore('depression')
+    const anxiety = calculateDimensionScore('anxiety')
+    const stress = calculateDimensionScore('stress')
+    // 返回三个维度标准分的平均值
+    return Math.round((depression.standardScore + anxiety.standardScore + stress.standardScore) / 3)
+  }
+
+  // 生成各维度结果（DASS-21）
   const generateCategoryResults = () => {
-    const categories = ['焦虑', '抑郁', '睡眠', '压力管理', '人际关系']
-    return categories.map(category => {
-      const categoryQuestions = questions.filter(q => q.category === category)
-      if (categoryQuestions.length === 0) {
-        return {
-          name: category,
-          score: 0,
-          level: 'low' as const,
-          description: '暂无相关评估数据',
-          suggestions: ['建议完成相关评估问题']
-        }
-      }
-      
-      const categoryScore = categoryQuestions.reduce((sum, q) => {
-        const answer = answers[q.id]
-        return sum + (answer || 3)
-      }, 0) / categoryQuestions.length
-      
-      const score = Math.round((categoryScore / 5) * 100)
-      let level: 'low' | 'medium' | 'high' = 'medium'
-      if (score <= 40) level = 'low'
-      else if (score >= 70) level = 'high'
+    const dimensions: Array<{key: 'depression' | 'anxiety' | 'stress', name: string}> = [
+      { key: 'depression', name: '抑郁' },
+      { key: 'anxiety', name: '焦虑' }, 
+      { key: 'stress', name: '压力' }
+    ]
+    
+    return dimensions.map(dim => {
+      const scores = calculateDimensionScore(dim.key)
+      const level = getDimensionLevel(scores.standardScore, dim.key)
       
       return {
-        name: category,
-        score,
+        name: dim.name,
+        rawScore: scores.rawScore,
+        standardScore: scores.standardScore,
         level,
-        description: getCategoryDescription(category, level),
-        suggestions: getCategorySuggestions(category, level)
+        description: getDassCategoryDescription(dim.key, level),
+        suggestions: getDassCategorySuggestions(dim.key, level)
       }
     })
   }
 
-  // 获取维度描述
-  const getCategoryDescription = (category: string, level: 'low' | 'medium' | 'high') => {
-    const descriptions: Record<string, Record<'low' | 'medium' | 'high', string>> = {
-      '焦虑': {
-        low: '您的焦虑水平较低，情绪状态稳定',
-        medium: '您的焦虑水平适中，建议关注情绪变化',
-        high: '您的焦虑水平较高，建议寻求专业帮助'
+  // DASS-21维度描述
+  const getDassCategoryDescription = (dimension: 'depression' | 'anxiety' | 'stress', level: 'normal' | 'mild' | 'moderate' | 'severe' | 'extremely_severe') => {
+    const descriptions = {
+      depression: {
+        normal: '您的情绪状态良好，没有明显的抑郁症状',
+        mild: '您可能存在轻度的情绪低落，但仍在可控范围内',
+        moderate: '您的抑郁症状达到中度水平，建议关注并寻求支持',
+        severe: '您的抑郁症状较为严重，强烈建议寻求专业心理咨询',
+        extremely_severe: '您的抑郁症状非常严重，需要立即寻求专业治疗'
       },
-      '抑郁': {
-        low: '您的情绪状态良好，生活积极向上',
-        medium: '您的情绪状态一般，建议增加积极活动',
-        high: '您的情绪状态需要关注，建议寻求专业支持'
+      anxiety: {
+        normal: '您的焦虑水平正常，能够有效应对日常压力',
+        mild: '您可能存在轻度焦虑，但基本不影响日常生活',
+        moderate: '您的焦虑症状达到中度水平，建议学习放松技巧',
+        severe: '您的焦虑症状较为严重，建议寻求专业心理咨询',
+        extremely_severe: '您的焦虑症状非常严重，需要立即寻求专业治疗'
       },
-      '睡眠': {
-        low: '您的睡眠质量良好，作息规律',
-        medium: '您的睡眠质量一般，建议改善睡眠习惯',
-        high: '您的睡眠质量较差，建议寻求专业帮助'
-      },
-      '压力管理': {
-        low: '您的压力管理能力很强，能很好应对挑战',
-        medium: '您的压力管理能力一般，建议学习放松技巧',
-        high: '您的压力管理能力需要提升，建议寻求指导'
-      },
-      '人际关系': {
-        low: '您的人际关系和谐，社交能力良好',
-        medium: '您的人际关系一般，建议改善沟通技巧',
-        high: '您的人际关系需要关注，建议寻求社交支持'
+      stress: {
+        normal: '您的压力管理能力良好，能够有效应对生活挑战',
+        mild: '您可能感受到一定程度的压力，但仍能正常应对',
+        moderate: '您的压力水平较高，建议学习压力管理技巧',
+        severe: '您承受的压力很大，强烈建议寻求专业指导',
+        extremely_severe: '您的压力水平极高，需要立即寻求专业帮助'
       }
     }
-    return descriptions[category]?.[level] || '暂无相关描述信息'
+    return descriptions[dimension][level]
   }
 
-  // 获取维度建议
-  const getCategorySuggestions = (category: string, level: 'low' | 'medium' | 'high') => {
-    const suggestions: Record<string, Record<'low' | 'medium' | 'high', string[]>> = {
-      '焦虑': {
-        low: ['保持当前状态', '继续放松练习'],
-        medium: ['学习深呼吸技巧', '尝试冥想练习', '规律运动'],
-        high: ['寻求专业心理咨询', '学习认知行为疗法', '考虑药物治疗']
+  // DASS-21维度建议
+  const getDassCategorySuggestions = (dimension: 'depression' | 'anxiety' | 'stress', level: 'normal' | 'mild' | 'moderate' | 'severe' | 'extremely_severe') => {
+    const suggestions = {
+      depression: {
+        normal: ['保持良好的生活习惯', '继续参与喜欢的活动', '定期运动'],
+        mild: ['增加户外活动', '保持社交联系', '规律作息', '进行适度运动'],
+        moderate: ['寻求朋友家人支持', '考虑心理咨询', '建立日常正念练习', '参加兴趣小组'],
+        severe: ['立即寻求专业心理咨询', '考虑认知行为疗法', '建立强有力的支持网络', '必要时考虑药物治疗'],
+        extremely_severe: ['紧急寻求心理健康专业人士帮助', '考虑住院治疗', '建立24小时支持系统', '立即开始药物治疗']
       },
-      '抑郁': {
-        low: ['保持积极心态', '继续兴趣爱好'],
-        medium: ['增加户外活动', '与朋友多交流', '培养新爱好'],
-        high: ['寻求专业心理治疗', '考虑药物治疗', '建立支持网络']
+      anxiety: {
+        normal: ['继续当前的压力管理方法', '保持规律运动', '维持充足睡眠'],
+        mild: ['学习深呼吸技巧', '尝试渐进式肌肉放松', '减少咖啡因摄入', '保持规律作息'],
+        moderate: ['学习正念冥想', '考虑瑜伽或太极', '限制刺激性活动', '寻求朋友支持'],
+        severe: ['寻求专业心理咨询', '学习认知重构技巧', '考虑抗焦虑治疗', '建立应急应对计划'],
+        extremely_severe: ['立即寻求心理健康专业人士帮助', '考虑药物治疗', '建立危机干预计划', '避免独处时间过长']
       },
-      '睡眠': {
-        low: ['保持良好习惯', '规律作息'],
-        medium: ['避免咖啡因', '睡前放松', '固定睡眠时间'],
-        high: ['咨询睡眠专家', '检查睡眠环境', '考虑睡眠治疗']
-      },
-      '压力管理': {
-        low: ['继续当前方法', '分享经验给他人'],
-        medium: ['学习时间管理', '练习放松技巧', '寻求支持'],
-        high: ['学习压力管理技巧', '寻求专业指导', '建立健康习惯']
-      },
-      '人际关系': {
-        low: ['保持良好关系', '继续社交活动'],
-        medium: ['改善沟通技巧', '参加社交活动', '寻求反馈'],
-        high: ['学习社交技巧', '寻求专业指导', '建立支持网络']
+      stress: {
+        normal: ['保持工作生活平衡', '继续现有的放松活动', '定期评估压力源'],
+        mild: ['学习时间管理技巧', '设定合理目标', '增加休息时间', '培养兴趣爱好'],
+        moderate: ['重新评估优先级', '学习说"不"', '寻求工作或学习支持', '建立放松例程'],
+        severe: ['寻求专业压力管理指导', '考虑减少责任', '建立强大支持网络', '学习问题解决技巧'],
+        extremely_severe: ['立即寻求专业帮助', '考虑暂时减少工作学习负担', '建立紧急支持系统', '必要时考虑药物辅助']
       }
     }
-    return suggestions[category]?.[level] || ['建议咨询专业人士获取个性化建议']
+    return suggestions[dimension][level]
   }
 
-  // 计算风险等级
+  // 计算风险等级（基于DASS-21）
   const calculateRiskLevel = (): 'low' | 'medium' | 'high' => {
     try {
-      const score = calculateOverallScore()
-      if (score <= 40) return 'low'
-      if (score >= 70) return 'high'
-      return 'medium'
+      const depression = calculateDimensionScore('depression')
+      const anxiety = calculateDimensionScore('anxiety')
+      const stress = calculateDimensionScore('stress')
+      
+      const depLevel = getDimensionLevel(depression.standardScore, 'depression')
+      const anxLevel = getDimensionLevel(anxiety.standardScore, 'anxiety')
+      const stressLevel = getDimensionLevel(stress.standardScore, 'stress')
+      
+      // 如果任一维度达到重度或极重度，判定为高风险
+      if (depLevel === 'severe' || depLevel === 'extremely_severe' ||
+          anxLevel === 'severe' || anxLevel === 'extremely_severe' ||
+          stressLevel === 'severe' || stressLevel === 'extremely_severe') {
+        return 'high'
+      }
+      
+      // 如果任一维度达到中度，或多个维度达到轻度，判定为中等风险
+      if (depLevel === 'moderate' || anxLevel === 'moderate' || stressLevel === 'moderate' ||
+          [depLevel, anxLevel, stressLevel].filter(level => level === 'mild').length >= 2) {
+        return 'medium'
+      }
+      
+      // 其他情况判定为低风险
+      return 'low'
     } catch (error) {
       console.error('计算风险等级时出错:', error)
       return 'medium'
@@ -432,62 +647,532 @@ export default function AssessmentPage() {
       <RequireRole role="student">
         {/* 通过DashboardLayout的title属性设置页面标题，避免重复 */}
         <DashboardLayout title="心理评估结果">
-          <div className="space-y-6">
-            {/* 结果概览统计卡片 */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <div className="flex items-center justify-between">
+          <div className="space-y-8">
+            {/* 如果有综合报告，主要展示综合结果 */}
+            {showComprehensiveReport && comprehensiveReport ? (
+              <>
+            {/* 综合评估报告 */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                  className="relative bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 border border-purple-200/50 rounded-3xl p-8 shadow-xl overflow-hidden"
+                >
+                  {/* 背景装饰 */}
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-purple-200/30 to-transparent rounded-full -translate-y-16 translate-x-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-pink-200/30 to-transparent rounded-full translate-y-12 -translate-x-12"></div>
+                  
+                  <div className="relative z-10">
+                    <div className="flex items-center space-x-4 mb-8">
+                      <div className="relative p-3 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl shadow-lg">
+                        <Brain className="w-8 h-8 text-white" />
+                        <div className="absolute -bottom-1 -right-1 p-1 bg-white rounded-full shadow-md">
+                          <BarChart3 className="w-3 h-3 text-purple-600" />
+                        </div>
+                      </div>
                   <div>
-                    <p className="text-sm text-gray-600">总体健康评分</p>
-                    <p className="text-2xl font-bold text-gray-900">{result.overallScore}</p>
+                        <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-900 to-pink-900 bg-clip-text text-transparent">
+                          🎯 综合心理评估报告
+                        </h2>
+                        <p className="text-purple-700/80 text-lg">融合AI智能分析与标准化量表的综合评估</p>
+                      </div>
                   </div>
-                  <Brain className="w-8 h-8 text-purple-600" />
                 </div>
+                
+                  {/* 综合分析摘要 */}
+                  <div className="relative bg-white/90 backdrop-blur-sm rounded-2xl p-6 mb-8 shadow-lg border border-white/50">
+                    <div className="flex items-center space-x-3 mb-4">
+                      <div className="p-2 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl">
+                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </div>
+                      <h3 className="text-xl font-bold text-gray-900">📄 综合分析摘要</h3>
+                    </div>
+                    <div className="bg-gradient-to-r from-gray-50 to-blue-50/50 rounded-xl p-5 border-l-4 border-purple-500">
+                      <p className="text-gray-800 leading-relaxed text-lg">
+                    {comprehensiveReport.assessment_report.executive_summary}
+                  </p>
+                    </div>
+                </div>
+
+                  {/* 核心评估指标 */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.1 }}
+                      className={`relative group hover:scale-105 transition-all duration-300 ${
+                        comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? 'bg-gradient-to-br from-green-50 to-emerald-100' :
+                        comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? 'bg-gradient-to-br from-yellow-50 to-orange-100' :
+                        'bg-gradient-to-br from-red-50 to-pink-100'
+                      } rounded-2xl p-6 shadow-lg border border-white/50 backdrop-blur-sm`}
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent rounded-2xl"></div>
+                      <div className="relative z-10">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className={`p-2 rounded-xl ${
+                              comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? 'bg-green-500' :
+                              comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            } shadow-lg`}>
+                              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                              </svg>
+                            </div>
+                            <h4 className="font-bold text-gray-900">🚨 综合风险等级</h4>
+                          </div>
+                          <div className={`w-3 h-3 rounded-full animate-pulse ${
+                            comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? 'bg-green-500' :
+                            comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? 'bg-yellow-500' :
+                            'bg-red-500'
+                          }`}></div>
+                        </div>
+                        <p className={`text-3xl font-black mb-3 ${
+                      comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? 'text-green-700' :
+                      comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? 'text-yellow-700' :
+                      'text-red-700'
+                    }`}>
+                      {comprehensiveReport.assessment_report.overall_assessment.risk_level === 'low' ? '低风险' :
+                       comprehensiveReport.assessment_report.overall_assessment.risk_level === 'medium' ? '中等风险' : '高风险'}
+                    </p>
+                        <div className="space-y-2">
+                          <div className="flex items-center space-x-2 text-sm text-gray-600 bg-white/50 rounded-lg p-2">
+                            <Brain className="w-4 h-4 text-blue-600" />
+                            <span>AI分析: {aiAssessmentResult?.emotion_trend?.riskLevel === 'high' ? '高风险' : aiAssessmentResult?.emotion_trend?.riskLevel === 'medium' ? '中风险' : '低风险'}</span>
+                  </div>
+                          <div className="flex items-center space-x-2 text-sm text-gray-600 bg-white/50 rounded-lg p-2">
+                            <BarChart3 className="w-4 h-4 text-green-600" />
+                            <span>量表评估: {getRiskLabel(result.riskLevel)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.2 }}
+                      className="relative group hover:scale-105 transition-all duration-300 bg-gradient-to-br from-blue-50 to-cyan-100 rounded-2xl p-6 shadow-lg border border-white/50 backdrop-blur-sm"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent rounded-2xl"></div>
+                      <div className="relative z-10">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="p-2 bg-blue-500 rounded-xl shadow-lg">
+                              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                              </svg>
+                            </div>
+                            <h4 className="font-bold text-gray-900">💭 综合情绪评估</h4>
+                          </div>
+                          <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></div>
+                        </div>
+                        <p className="text-3xl font-black text-blue-700 mb-3">
+                          {comprehensiveReport.assessment_report.overall_assessment.dominant_emotion === 'positive' ? '积极倾向' :
+                           comprehensiveReport.assessment_report.overall_assessment.dominant_emotion === 'negative' ? '需要关注' : '相对平稳'}
+                        </p>
+                        <div className="space-y-2">
+                          <div className="flex items-center space-x-2 text-sm text-gray-600 bg-white/50 rounded-lg p-2">
+                            <Brain className="w-4 h-4 text-blue-600" />
+                            <span>AI识别: {aiAssessmentResult?.emotion_trend?.currentDominant || '平稳'}</span>
+                  </div>
+                          <div className="flex items-center space-x-2 text-sm text-gray-600 bg-white/50 rounded-lg p-2">
+                            <BarChart3 className="w-4 h-4 text-green-600" />
+                            <span>量表总分: {result.overallScore}/42</span>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.3 }}
+                      className="relative group hover:scale-105 transition-all duration-300 bg-gradient-to-br from-indigo-50 to-purple-100 rounded-2xl p-6 shadow-lg border border-white/50 backdrop-blur-sm"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent rounded-2xl"></div>
+                      <div className="relative z-10">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="p-2 bg-indigo-500 rounded-xl shadow-lg">
+                              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                              </svg>
+                            </div>
+                            <h4 className="font-bold text-gray-900">📈 评估可靠性</h4>
+                          </div>
+                          <div className="w-3 h-3 rounded-full bg-indigo-500 animate-pulse"></div>
+                        </div>
+                        <p className="text-3xl font-black text-indigo-700 mb-3">
+                      {comprehensiveReport.assessment_report.overall_assessment.assessment_reliability === 'high' ? '高' :
+                       comprehensiveReport.assessment_report.overall_assessment.assessment_reliability === 'medium' ? '中等' : '较低'}
+                    </p>
+                        <div className="space-y-2">
+                          <div className="flex items-center space-x-2 text-sm text-gray-600 bg-white/50 rounded-lg p-2">
+                            <Brain className="w-4 h-4 text-blue-600" />
+                            <span>对话轮数: {aiAssessmentResult?.conversation_count || 0} 轮</span>
+                  </div>
+                          <div className="flex items-center space-x-2 text-sm text-gray-600 bg-white/50 rounded-lg p-2">
+                            <BarChart3 className="w-4 h-4 text-green-600" />
+                            <span>量表维度: {result.categories.length} 项</span>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                </div>
+
+                  {/* 个性化建议方案 */}
+                {comprehensiveReport.assessment_report.recommendations.immediate_actions.length > 0 && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.4 }}
+                      className="relative bg-white/95 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/50 overflow-hidden"
+                    >
+                      <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-orange-200/20 to-transparent rounded-full -translate-y-12 translate-x-12"></div>
+                      
+                      <div className="relative z-10">
+                        <div className="flex items-center space-x-3 mb-6">
+                          <div className="p-2 bg-gradient-to-br from-orange-500 to-red-500 rounded-xl shadow-lg">
+                            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                        </div>
+                          <h4 className="text-xl font-bold text-gray-900">⚡ 个性化建议方案</h4>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {comprehensiveReport.assessment_report.recommendations.immediate_actions.slice(0, 4).map((action, index) => (
+                            <motion.div 
+                              key={index}
+                              initial={{ opacity: 0, x: -20 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: 0.5 + index * 0.1 }}
+                              className="group hover:scale-105 transition-all duration-300"
+                            >
+                              <div className="flex items-start space-x-3 p-4 bg-gradient-to-br from-orange-50 via-yellow-50 to-amber-50 rounded-xl border border-orange-200/50 shadow-sm hover:shadow-md transition-all">
+                                <div className="p-1.5 bg-orange-500 rounded-lg shadow-sm">
+                                  <AlertCircle className="w-4 h-4 text-white" />
+                                </div>
+                                <div className="flex-1">
+                                  <span className="text-gray-800 text-sm leading-relaxed font-medium">{action}</span>
+                                </div>
+                              </div>
+                            </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                    </motion.div>
+                  )}
+                </motion.div>
+
+                {/* 详细数据折叠面板 */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.5 }}
+                  className="bg-white/90 backdrop-blur-sm rounded-2xl border border-gray-200/50 shadow-lg hover:shadow-xl transition-all duration-300"
+                >
+                  <div className="p-6">
+                    <details className="group">
+                      <summary className="flex items-center justify-between cursor-pointer list-none hover:bg-gray-50/50 rounded-xl p-3 -m-3 transition-all duration-200">
+                        <div className="flex items-center space-x-4">
+                          <div className="p-2 bg-gradient-to-br from-gray-500 to-gray-600 rounded-xl shadow-md">
+                            <BarChart3 className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-bold text-gray-900">查看详细评估数据</h3>
+                            <p className="text-sm text-gray-600">点击展开原始AI分析和量表数据</p>
+                          </div>
+                        </div>
+                        <div className="group-open:rotate-180 transition-transform duration-300 p-2 bg-gray-100 rounded-full">
+                          <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </div>
+                      </summary>
+                      
+                      <div className="mt-6 space-y-6">
+                        {/* AI评估详情 */}
+                        {hasAIAssessment && aiAssessmentResult && (
+                          <motion.div 
+                            initial={{ opacity: 0, x: -20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.1 }}
+                            className="relative p-6 bg-gradient-to-br from-blue-50 to-cyan-50 rounded-2xl border border-blue-200/50 overflow-hidden"
+                          >
+                            <div className="absolute top-0 right-0 w-16 h-16 bg-blue-200/20 rounded-full -translate-y-8 translate-x-8"></div>
+                            <div className="relative z-10">
+                              <div className="flex items-center space-x-3 mb-4">
+                                <div className="p-2 bg-blue-500 rounded-xl shadow-md">
+                                  <Brain className="w-5 h-5 text-white" />
+                                </div>
+                                <h4 className="text-lg font-bold text-blue-900">🤖 AI智能评估详情</h4>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="bg-white/70 backdrop-blur-sm rounded-xl p-3 border border-blue-200/50">
+                                  <div className="text-sm text-gray-600 mb-1">情绪状态</div>
+                                  <div className="text-lg font-bold text-blue-700">{aiAssessmentResult?.emotion_trend?.currentDominant || '平稳'}</div>
+                                </div>
+                                <div className="bg-white/70 backdrop-blur-sm rounded-xl p-3 border border-blue-200/50">
+                                  <div className="text-sm text-gray-600 mb-1">置信度</div>
+                                  <div className="text-lg font-bold text-blue-700">{Math.round((aiAssessmentResult?.emotion_trend?.confidence || 0.8) * 100)}%</div>
+                                </div>
+                                <div className="bg-white/70 backdrop-blur-sm rounded-xl p-3 border border-blue-200/50">
+                                  <div className="text-sm text-gray-600 mb-1">对话轮数</div>
+                                  <div className="text-lg font-bold text-blue-700">{aiAssessmentResult?.conversation_count || 0} 轮</div>
+                                </div>
+                              </div>
+                            </div>
+              </motion.div>
+            )}
+
+                        {/* DASS-21详情 */}
+                        <motion.div 
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.2 }}
+                          className="relative p-6 bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl border border-green-200/50 overflow-hidden"
+                        >
+                          <div className="absolute top-0 left-0 w-16 h-16 bg-green-200/20 rounded-full -translate-y-8 -translate-x-8"></div>
+                          <div className="relative z-10">
+                            <div className="flex items-center space-x-3 mb-4">
+                              <div className="p-2 bg-green-500 rounded-xl shadow-md">
+                                <BarChart3 className="w-5 h-5 text-white" />
+                              </div>
+                              <h4 className="text-lg font-bold text-green-900">📊 DASS-21量表详情</h4>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                              <div className="space-y-3">
+                                <div className="bg-white/70 backdrop-blur-sm rounded-xl p-4 border border-green-200/50">
+                                  <div className="text-sm text-gray-600 mb-2">总体评分</div>
+                                  <div className="text-2xl font-bold text-green-700">{result.overallScore}<span className="text-sm text-gray-600">/42</span></div>
+                                </div>
+                                <div className="bg-white/70 backdrop-blur-sm rounded-xl p-4 border border-green-200/50">
+                                  <div className="text-sm text-gray-600 mb-2">风险等级</div>
+                                  <div className="text-lg font-bold text-green-700">{getRiskLabel(result.riskLevel)}</div>
+                                </div>
+                              </div>
+                              <div className="space-y-3">
+                                {result.categories.map((category, index) => (
+                                  <div key={index} className="bg-white/70 backdrop-blur-sm rounded-xl p-3 border border-green-200/50">
+                                    <div className="flex justify-between items-center">
+                                      <span className="font-medium text-gray-800">{category.name}</span>
+                                      <div className="text-right">
+                                        <div className="text-sm font-bold text-gray-900">{category.rawScore}/14</div>
+                                        <div className={`text-xs font-medium ${
+                                          category.level === 'normal' ? 'text-green-600' :
+                                          category.level === 'mild' ? 'text-yellow-600' :
+                                          category.level === 'moderate' ? 'text-orange-600' : 'text-red-600'
+                                        }`}>
+                                          {category.level === 'normal' ? '正常' :
+                                           category.level === 'mild' ? '轻度' :
+                                           category.level === 'moderate' ? '中度' : 
+                                           category.level === 'severe' ? '重度' : '极重度'}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      </div>
+                    </details>
+                  </div>
+                </motion.div>
+              </>
+            ) : (
+              /* 如果没有综合报告，显示单独的评估结果 */
+              <>
+                {/* AI评估结果 */}
+                {hasAIAssessment && aiAssessmentResult && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                    className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6"
+              >
+                    <div className="flex items-center space-x-3 mb-6">
+                      <Brain className="w-8 h-8 text-blue-600" />
+                  <div>
+                        <h2 className="text-2xl font-bold text-blue-900">🤖 AI智能评估结果</h2>
+                        <p className="text-blue-700">基于自然语言对话的情感分析和心理状态评估</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-white rounded-xl p-4 border border-blue-100 shadow-sm">
+                        <h4 className="font-semibold text-gray-900 mb-2">情绪状态</h4>
+                        <p className="text-xl font-bold text-blue-600">
+                          {aiAssessmentResult?.emotion_trend?.currentDominant || '平稳'}
+                        </p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          置信度: {Math.round((aiAssessmentResult?.emotion_trend?.confidence || 0.8) * 100)}%
+                    </p>
+                  </div>
+
+                      <div className="bg-white rounded-xl p-4 border border-blue-100 shadow-sm">
+                        <h4 className="font-semibold text-gray-900 mb-2">AI风险评估</h4>
+                        <p className={`text-xl font-bold ${
+                          aiAssessmentResult?.emotion_trend?.riskLevel === 'high' ? 'text-red-600' :
+                          aiAssessmentResult?.emotion_trend?.riskLevel === 'medium' ? 'text-yellow-600' :
+                          'text-green-600'
+                        }`}>
+                          {aiAssessmentResult?.emotion_trend?.riskLevel === 'high' ? '高风险' :
+                           aiAssessmentResult?.emotion_trend?.riskLevel === 'medium' ? '中等风险' : '低风险'}
+                        </p>
+                        <p className="text-sm text-gray-600 mt-1">基于对话内容分析</p>
+                      </div>
+
+                      <div className="bg-white rounded-xl p-4 border border-blue-100 shadow-sm">
+                        <h4 className="font-semibold text-gray-900 mb-2">对话质量</h4>
+                        <p className="text-xl font-bold text-purple-600">
+                          {aiAssessmentResult?.conversation_count || 0} 轮
+                        </p>
+                        <p className="text-sm text-gray-600 mt-1">深度交流评估</p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+                {/* DASS-21量表结果 */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1 }}
+                  className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-2xl p-6"
+                >
+                  <div className="flex items-center space-x-3 mb-6">
+                    <BarChart3 className="w-8 h-8 text-green-600" />
+                  <div>
+                      <h2 className="text-2xl font-bold text-green-900">📊 DASS-21量表评估结果</h2>
+                      <p className="text-green-700">标准化心理健康量表评估</p>
+                  </div>
+                </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <div className="bg-white rounded-xl p-4 border border-green-100 shadow-sm">
+                      <h4 className="font-semibold text-gray-900 mb-2">总体评分</h4>
+                      <p className="text-2xl font-bold text-purple-600">{result.overallScore}</p>
+                      <p className="text-sm text-gray-600 mt-1">满分42分</p>
               </div>
               
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">风险等级</p>
-                    <p className={`text-sm font-semibold ${
+                    <div className="bg-white rounded-xl p-4 border border-green-100 shadow-sm">
+                      <h4 className="font-semibold text-gray-900 mb-2">风险等级</h4>
+                      <p className={`text-xl font-bold ${
                       result.riskLevel === 'low' ? 'text-green-600' :
                       result.riskLevel === 'medium' ? 'text-yellow-600' : 'text-red-600'
                     }`}>
                       {getRiskLabel(result.riskLevel)}
                     </p>
+                      <p className="text-sm text-gray-600 mt-1">基于量表分析</p>
                   </div>
-                  {result.riskLevel === 'low' ? (
-                    <CheckCircle className="w-8 h-8 text-green-600" />
-                  ) : result.riskLevel === 'medium' ? (
-                    <AlertCircle className="w-8 h-8 text-yellow-600" />
-                  ) : (
-                    <AlertCircle className="w-8 h-8 text-red-600" />
-                  )}
+
+                    <div className="bg-white rounded-xl p-4 border border-green-100 shadow-sm">
+                      <h4 className="font-semibold text-gray-900 mb-2">评估维度</h4>
+                      <p className="text-xl font-bold text-blue-600">{result.categories.length}</p>
+                      <p className="text-sm text-gray-600 mt-1">抑郁/焦虑/压力</p>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-4 border border-green-100 shadow-sm">
+                      <h4 className="font-semibold text-gray-900 mb-2">评估时间</h4>
+                      <p className="text-sm font-semibold text-gray-700">
+                        {result.timestamp.toLocaleDateString('zh-CN')}
+                      </p>
+                      <p className="text-sm text-gray-600 mt-1">完成日期</p>
                 </div>
               </div>
               
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">评估维度</p>
-                    <p className="text-2xl font-bold text-gray-900">{result.categories.length}</p>
+                  {/* 量表详细结果 */}
+                  <div className="bg-white rounded-xl p-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">📈 各维度详细分析</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {result.categories.map((category, index) => (
+                        <div key={index} className="p-3 bg-gray-50 rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-medium text-gray-800">{category.name}</span>
+                            <span className={`text-sm font-semibold ${
+                              category.level === 'normal' ? 'text-green-600' :
+                              category.level === 'mild' ? 'text-yellow-600' :
+                              category.level === 'moderate' ? 'text-orange-600' : 'text-red-600'
+                            }`}>
+                              {category.level === 'normal' ? '正常' :
+                               category.level === 'mild' ? '轻度' :
+                               category.level === 'moderate' ? '中度' : 
+                               category.level === 'severe' ? '重度' : '极重度'}
+                            </span>
                   </div>
-                  <BarChart3 className="w-8 h-8 text-blue-600" />
+                          <div className="w-full bg-gray-200 rounded-full h-2 relative overflow-hidden">
+                            <div 
+                              className={`h-2 rounded-full transition-all duration-500 ${
+                                category.level === 'normal' ? 'bg-green-500' :
+                                category.level === 'mild' ? 'bg-yellow-500' :
+                                category.level === 'moderate' ? 'bg-orange-500' : 'bg-red-500'
+                              } ${category.rawScore > 14 ? 'animate-pulse' : ''}`}
+                              style={{ width: `${Math.min((category.rawScore / 14) * 100, 100)}%` }}
+                            ></div>
+                            {/* 超出指示器 */}
+                            {category.rawScore > 14 && (
+                              <div className="absolute right-0 top-0 h-2 w-1 bg-red-800 rounded-r-full"></div>
+                            )}
                 </div>
+                          <div className="flex justify-between items-center mt-1">
+                            <p className="text-sm text-gray-600">{category.rawScore}/14分</p>
+                            {category.rawScore > 14 && (
+                              <span className="text-xs text-red-600 font-medium bg-red-50 px-2 py-0.5 rounded-full">
+                                超出量表范围
+                              </span>
+                            )}
               </div>
-              
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">评估时间</p>
-                    <p className="text-sm font-semibold text-gray-700">
-                      {result.timestamp.toLocaleDateString('zh-CN')}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
+              </>
+            )}
+
+            {/* 生成综合报告中的提示 */}
+            {isGeneratingComprehensive && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="relative bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 border border-blue-200/50 rounded-2xl p-8 shadow-xl overflow-hidden"
+              >
+                {/* 背景动画装饰 */}
+                <div className="absolute inset-0">
+                  <div className="absolute top-0 left-0 w-32 h-32 bg-blue-200/20 rounded-full animate-pulse"></div>
+                  <div className="absolute bottom-0 right-0 w-24 h-24 bg-purple-200/20 rounded-full animate-pulse delay-500"></div>
+                </div>
+                
+                <div className="relative z-10 flex items-center space-x-6">
+                  <div className="relative">
+                    <div className="animate-spin rounded-full h-16 w-16 border-4 border-blue-200 border-t-blue-600 shadow-lg"></div>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Brain className="w-6 h-6 text-blue-600 animate-pulse" />
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-2xl font-bold bg-gradient-to-r from-blue-900 to-purple-900 bg-clip-text text-transparent mb-2">
+                      🔄 正在生成综合评估报告...
+                    </h3>
+                    <p className="text-blue-700/80 text-lg leading-relaxed">
+                      正在结合AI对话分析和量表结果，为您生成全面的心理健康评估报告
                     </p>
+                    <div className="mt-4 flex items-center space-x-4">
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce delay-100"></div>
+                        <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce delay-200"></div>
                   </div>
-                  <Clock className="w-8 h-8 text-gray-600" />
+                      <span className="text-sm text-blue-600 font-medium">处理中...</span>
                 </div>
               </div>
             </div>
+              </motion.div>
+            )}
 
             {/* 主体内容容器 */}
             <div className="bg-white rounded-2xl shadow-sm border p-6">
@@ -575,25 +1260,35 @@ export default function AssessmentPage() {
                       <div className="flex items-center justify-between mb-4">
                         <h4 className="font-semibold text-gray-900">{category.name}</h4>
                         <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          getRiskColor(category.level as 'low' | 'medium' | 'high')
+                          getDassLevelColor(category.level)
                         }`}>
-                          {getRiskLabel(category.level as 'low' | 'medium' | 'high')}
+                          {getDassLevelLabel(category.level)}
                         </span>
                       </div>
                       
                       <div className="mb-4">
                         <div className="flex justify-between items-center mb-2">
-                          <span className="text-sm text-gray-600">维度得分</span>
-                          <span className="text-lg font-bold text-gray-900">{category.score}</span>
+                          <span className="text-sm text-gray-600">标准分</span>
+                          <span className="text-lg font-bold text-gray-900">{category.standardScore}</span>
                         </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs text-gray-500">原始分</span>
+                          <span className="text-sm text-gray-700">{category.rawScore}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2 relative overflow-hidden">
                           <div 
                             className={`h-2 rounded-full transition-all duration-500 ${
-                              category.level === 'low' ? 'bg-green-500' :
-                              category.level === 'medium' ? 'bg-yellow-500' : 'bg-red-500'
-                            }`}
-                            style={{ width: `${category.score}%` }}
+                              category.level === 'normal' ? 'bg-green-500' :
+                              category.level === 'mild' ? 'bg-blue-500' :
+                              category.level === 'moderate' ? 'bg-yellow-500' :
+                              category.level === 'severe' ? 'bg-orange-500' : 'bg-red-500'
+                            } ${category.standardScore > 40 ? 'animate-pulse' : ''}`}
+                            style={{ width: `${Math.min((category.standardScore / 40) * 100, 100)}%` }}
                           ></div>
+                          {/* 超出指示器 */}
+                          {category.standardScore > 40 && (
+                            <div className="absolute right-0 top-0 h-2 w-1 bg-red-800 rounded-r-full"></div>
+                          )}
                         </div>
                       </div>
                       
@@ -717,12 +1412,14 @@ export default function AssessmentPage() {
                   >
                     智能匹配咨询师
                   </button>
+                  {!hasAIAssessment && (
                   <button 
                     onClick={() => router.push('/student/ai-assessment')}
                     className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                   >
                     AI深度评估
                   </button>
+                  )}
                   <button 
                     onClick={() => router.push('/student/anonymous-consultation')}
                     className="px-6 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
@@ -742,8 +1439,110 @@ export default function AssessmentPage() {
     return (
       <RequireRole role="student">
         {/* 通过DashboardLayout的title属性设置页面标题，避免重复 */}
-        <DashboardLayout title="心理评估测试">
+        <DashboardLayout title="DASS-21心理评估">
           <div className="space-y-6">
+            {/* AI评估状态提示 */}
+            {!hasAIAssessment && (
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-xl p-6"
+              >
+                <div className="flex items-center space-x-3 mb-4">
+                  <AlertCircle className="w-6 h-6 text-yellow-600" />
+                  <h3 className="text-lg font-semibold text-gray-900">建议先进行AI智能评估</h3>
+                </div>
+                <p className="text-gray-700 mb-4">
+                  为了获得更准确的心理健康评估，建议您先完成AI智能对话评估，然后再进行传统量表评估。
+                  这样可以生成更全面的综合评估报告。
+                </p>
+                <div className="flex space-x-3">
+                  <button
+                    onClick={() => router.push('/student/ai-assessment')}
+                    className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
+                  >
+                    <Brain className="w-4 h-4" />
+                    <span>前往AI智能评估</span>
+                  </button>
+                  <button
+                    onClick={() => setCurrentStep(1)}
+                    className="bg-gray-600 text-white px-6 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+                  >
+                    继续传统评估
+                  </button>
+                </div>
+              </motion.div>
+            )}
+            
+            {hasAIAssessment && (
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-gradient-to-r from-blue-50 to-green-50 border border-blue-200 rounded-xl p-6"
+              >
+                {/* 标题区域 */}
+                <div className="flex items-center space-x-3 mb-6">
+                  <Brain className="w-6 h-6 text-blue-600" />
+                  <h3 className="text-lg font-semibold text-gray-900">AI评估已完成</h3>
+                </div>
+                
+                {/* 评估结果展示 */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                  <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-medium text-gray-600">当前情绪状态</p>
+                      <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                    </div>
+                    <p className="text-xl font-bold text-blue-600">
+                      {aiAssessmentResult?.emotion_trend?.currentDominant || '平稳'}
+                    </p>
+                  </div>
+                  
+                  <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-medium text-gray-600">风险等级</p>
+                      <div className={`w-2 h-2 rounded-full ${
+                        aiAssessmentResult?.emotion_trend?.riskLevel === 'high' ? 'bg-red-500' :
+                        aiAssessmentResult?.emotion_trend?.riskLevel === 'medium' ? 'bg-yellow-500' :
+                        'bg-green-500'
+                      }`}></div>
+                    </div>
+                    <p className={`text-xl font-bold ${
+                      aiAssessmentResult?.emotion_trend?.riskLevel === 'high' ? 'text-red-600' :
+                      aiAssessmentResult?.emotion_trend?.riskLevel === 'medium' ? 'text-yellow-600' :
+                      'text-green-600'
+                    }`}>
+                      {aiAssessmentResult?.emotion_trend?.riskLevel === 'high' ? '高风险' :
+                       aiAssessmentResult?.emotion_trend?.riskLevel === 'medium' ? '中风险' : '低风险'}
+                    </p>
+                  </div>
+                  
+                  <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-medium text-gray-600">对话轮数</p>
+                      <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+                    </div>
+                    <p className="text-xl font-bold text-purple-600">
+                      {aiAssessmentResult?.conversation_count || 0} 轮
+                    </p>
+                  </div>
+                </div>
+                
+                {/* 完成状态提示 */}
+                <div className="bg-white rounded-lg p-4 border border-green-100">
+                  <div className="flex items-start space-x-3">
+                    <CheckCircle className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-900 mb-1">AI对话评估已完成</h4>
+                      <p className="text-sm text-gray-600 leading-relaxed">
+                      完成本次量表评估后，系统将自动结合AI对话分析结果，为您生成综合心理评估报告
+                    </p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+            
             {/* 进度条 */}
             <div className="bg-white border-b">
               <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -851,9 +1650,9 @@ export default function AssessmentPage() {
 
               {/* 提示文本 */}
               <div className="mt-6 text-center">
-                <p className="text-sm text-gray-500 flex items-center justify-center">
+                                  <p className="text-sm text-gray-500 flex items-center justify-center">
                   <FileText className="h-4 w-4 mr-1.5" />
-                  请根据您最近一周的真实感受选择最符合的选项，答案无对错之分
+                  DASS-21量表：请根据过去一周内您的感受和体验，选择最符合的选项
                 </p>
               </div>
             </div>

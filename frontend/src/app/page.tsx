@@ -15,6 +15,11 @@ interface FormErrors {
   general?: string
 }
 
+interface FormMessages {
+  info?: string
+  error?: string
+}
+
 interface TestAccount {
   username: string
   password: string
@@ -56,6 +61,7 @@ export default function HomePage() {
     rememberMe: false
   })
   const [errors, setErrors] = useState<FormErrors>({})
+  const [messages, setMessages] = useState<FormMessages>({})
   const [isLoading, setIsLoading] = useState(false)
   const [loginSuccess, setLoginSuccess] = useState(false)
   const [showTestAccounts, setShowTestAccounts] = useState(false)
@@ -93,6 +99,16 @@ export default function HomePage() {
     }
   }
 
+  // 获取角色显示名称
+  const getRoleDisplayName = (role: string) => {
+    switch (role) {
+      case 'student': return '学生用户'
+      case 'counselor': return '心理咨询师'
+      case 'admin': return '系统管理员'
+      default: return role
+    }
+  }
+
   // 表单验证
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {}
@@ -115,8 +131,33 @@ export default function HomePage() {
     return Object.keys(newErrors).length === 0
   }
 
-  // 模拟登录（当后端不可用时）
-  const simulateLogin = async (): Promise<{success: boolean, userData?: any}> => {
+  // 真实登录API调用
+  const realLogin = async (): Promise<{success: boolean, userData?: any, error?: string}> => {
+    try {
+      const { api } = await import('@/lib')
+      
+      const loginResponse = await api.auth.login({
+        username: formData.username,
+        password: formData.password
+      })
+      
+      return {
+        success: true,
+        userData: {
+          access_token: loginResponse.access_token,
+          user_role: loginResponse.user_role,
+          username: loginResponse.username,
+          name: loginResponse.username || formData.username
+        }
+      }
+    } catch (error) {
+      console.error('登录API调用失败:', error)
+      throw error
+    }
+  }
+
+  // 模拟登录（仅作为备选方案）
+  const simulateLogin = async (): Promise<{success: boolean, userData?: any, error?: string}> => {
     return new Promise((resolve) => {
       setTimeout(() => {
         // 只检查用户名和密码，不考虑角色选择
@@ -129,10 +170,11 @@ export default function HomePage() {
           resolve({
             success: true,
             userData: {
-              access_token: `mock_token_${Date.now()}`,
-              user_role: testAccount.role,  // 使用账号的真实角色
+              access_token: `temp_token_${Date.now()}_${testAccount.username}`,
+              user_role: testAccount.role,
               username: testAccount.username,
-              name: testAccount.name
+              name: testAccount.name,
+              is_temporary: true // 标记为临时token
             }
           })
         } else {
@@ -145,8 +187,9 @@ export default function HomePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    // 清除之前的错误
+    // 清除之前的错误和消息
     setErrors({})
+    setMessages({})
     
     // 表单验证
     if (!validateForm()) {
@@ -165,28 +208,27 @@ export default function HomePage() {
       let userData: any = null
       
       try {
-        const response = await fetch('http://localhost:8000/api/auth/login', {
-          method: 'POST',
-          body: formDataToSend,
-          headers: {
-            'Accept': 'application/json',
-          }
-        })
-
-        if (response.ok) {
-          userData = await response.json()
-          loginSuccessful = true
-        } else {
-          const errorData = await response.json()
-          throw new Error(errorData.detail || '登录失败')
+        // 优先使用真实API登录
+        const realResult = await realLogin()
+        loginSuccessful = realResult.success
+        userData = realResult.userData
+        
+        if (!loginSuccessful) {
+          throw new Error('登录失败')
         }
       } catch (apiError) {
-        console.log('API不可用，使用模拟登录:', apiError)
+        console.log('真实API不可用，使用模拟登录:', apiError)
         
         // 后端不可用时使用模拟登录
         const mockResult = await simulateLogin()
         loginSuccessful = mockResult.success
         userData = mockResult.userData
+        
+        if (loginSuccessful && userData?.is_temporary) {
+          setMessages({
+            info: '⚠️ 当前使用临时登录模式，部分功能可能受限。请确保后端服务正常运行以获得完整功能。'
+          })
+        }
       }
 
       if (loginSuccessful && userData) {
@@ -211,16 +253,35 @@ export default function HomePage() {
           // 使用统一的导航逻辑
           const { getDefaultDashboardPath } = await import('@/lib/auth')
           
-          // 优先根据用户偏好进行跳转
           const preferredRole = formData.role
           const actualRole = userData.user_role
           
-          let targetRole = actualRole
+          // 跳转逻辑优化
+          let targetRole = actualRole // 默认使用实际角色
+          let redirectMessage = ''
           
-          // 如果偏好角色与实际角色一致，或管理员选择其他角色
-          if (preferredRole === actualRole || actualRole === 'admin') {
+          if (actualRole === 'admin') {
+            // 管理员可以访问任何角色的界面
             targetRole = preferredRole
+            if (preferredRole !== 'admin') {
+              redirectMessage = `以${getRoleDisplayName(preferredRole)}身份登录`
+            }
+          } else if (preferredRole === actualRole) {
+            // 偏好角色与实际角色一致
+            targetRole = actualRole
+          } else {
+            // 偏好角色与实际角色不一致，使用实际角色但给出提示
+            targetRole = actualRole
+            redirectMessage = `您的账号权限为${getRoleDisplayName(actualRole)}，已为您跳转到对应界面`
           }
+          
+          // 保存跳转信息供后续页面显示
+          if (redirectMessage) {
+            sessionStorage.setItem('login_redirect_message', redirectMessage)
+          }
+          
+          // 保存目标角色
+          localStorage.setItem('current_role_view', targetRole)
           
           // 跳转到对应的仪表板
           router.push(getDefaultDashboardPath(targetRole))
@@ -272,11 +333,21 @@ export default function HomePage() {
     // 清除错误
     setErrors({})
     
-    // 添加视觉反馈
+    // 添加视觉反馈和自动登录提示
     setTimeout(() => {
       const submitButton = document.querySelector('button[type="submit"]') as HTMLButtonElement
       if (submitButton) {
         submitButton.focus()
+        
+        // 显示提示信息
+        setMessages({
+          info: `✨ 已填入${account.name}的登录信息，点击"登录"按钮继续`
+        })
+        
+        // 3秒后清除提示
+        setTimeout(() => {
+          setMessages({})
+        }, 3000)
       }
     }, 100)
   }
@@ -290,6 +361,7 @@ export default function HomePage() {
       rememberMe: false
     })
     setErrors({})
+    setMessages({})
     setLoginSuccess(false)
   }
 
@@ -364,6 +436,21 @@ export default function HomePage() {
               >
                 <AlertCircle className="h-4 w-4 text-red-600" />
                 <span className="text-sm text-red-700">{errors.general}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* 信息提示 */}
+          <AnimatePresence>
+            {messages.info && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6 flex items-center space-x-2"
+              >
+                <CheckCircle className="h-4 w-4 text-blue-600" />
+                <span className="text-sm text-blue-700">{messages.info}</span>
               </motion.div>
             )}
           </AnimatePresence>
@@ -592,13 +679,19 @@ export default function HomePage() {
                   </div>
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
                     <div className="text-xs text-yellow-800">
-                      <div className="font-medium mb-1">🔍 登录说明：</div>
-                      <ul className="space-y-1 text-left">
-                        <li>• 登录时需要<strong>用户名</strong>和<strong>密码</strong>正确</li>
-                        <li>• <strong>账号类型偏好</strong>会影响登录后的跳转页面</li>
-                        <li>• 管理员账号可以选择以任何角色身份登录</li>
-                        <li>• 其他账号会根据权限和偏好智能跳转</li>
+                      <div className="font-medium mb-2">🔍 智能跳转说明：</div>
+                      <ul className="space-y-1.5 text-left">
+                        <li>• <strong>身份验证</strong>：用户名和密码必须正确</li>
+                        <li>• <strong>管理员特权</strong>：admin1可切换到任意角色界面</li>
+                        <li>• <strong>权限匹配</strong>：其他账号会跳转到对应权限界面</li>
+                        <li>• <strong>智能提示</strong>：权限不匹配时会显示说明信息</li>
                       </ul>
+                      <div className="mt-2 pt-2 border-t border-yellow-300">
+                        <div className="font-medium text-yellow-900">📍 跳转示例：</div>
+                        <div className="mt-1 text-yellow-700">
+                          student1选择"咨询师" → 自动跳转到学生界面 + 权限提示
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>

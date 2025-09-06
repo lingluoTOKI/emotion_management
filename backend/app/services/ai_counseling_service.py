@@ -15,6 +15,7 @@ from app.models.ai_counseling import AICounselingSession, RiskAssessment
 from app.models.user import Student
 from loguru import logger
 from app.services.xfyun_ai_service import xfyun_ai_service
+from app.services.bert_text_analyzer import bert_analyzer
 
 class AICounselingService:
     """AI心理咨询服务类"""
@@ -153,8 +154,13 @@ class AICounselingService:
         })
         
         # 分析用户情绪和风险
+        logger.info("准备调用情感分析...")
         emotion_analysis = await self._analyze_user_emotion(user_message)
+        logger.info(f"情感分析完成: {emotion_analysis}")
+        
+        logger.info("准备调用风险评估...")
         risk_assessment = await self._assess_risk_level(user_message, emotion_analysis)
+        logger.info(f"风险评估完成: {risk_assessment}")
         
         # 更新会话状态
         session["current_emotion"] = emotion_analysis.get("dominant_emotion", "neutral")
@@ -216,9 +222,71 @@ class AICounselingService:
             return "您好！我是您的AI心理咨询助手。请告诉我您今天想聊什么，我会认真倾听并尽力帮助您。"
     
     async def _analyze_user_emotion(self, message: str) -> Dict[str, Any]:
-        """分析用户情绪"""
-        # 模拟情绪分析，实际应该使用NLP模型
-        # 这里实现简单的关键词匹配
+        """使用BERT分析用户情绪"""
+        logger.info(f"开始BERT情感分析，文本: '{message}'")
+        try:
+            # 危机词前置强制判定（优先级最高）
+            crisis_phrases = [
+                "自杀", "不想活", "结束生命", "结束一切", "想死", "我想死", "我要死", "让我死",
+                "活不下去", "死了算了", "一了百了", "轻生"
+            ]
+            if any(phrase in message for phrase in crisis_phrases):
+                logger.info("检测到危机短语，直接返回强负面情绪（高置信度）")
+                logger.warning(f"🚨 危机短语检测触发 - 消息: '{message}'")
+                return {
+                    "dominant_emotion": "sadness",  # 与前端映射一致（显示为悲伤/抑郁）
+                    "emotion_intensity": 0.95,
+                    "detected_emotions": {"sadness": 0.95},
+                    "confidence": 0.95,
+                    "analysis_method": "crisis_override",
+                    "bert_details": {"matched_crisis": True}
+                }
+
+            # 使用BERT进行情感分析
+            bert_result = bert_analyzer.analyze_emotion(message)
+            logger.info(f"AI咨询服务收到BERT分析结果: {bert_result}")
+            
+            if bert_result.get('dominant_emotion') and bert_result.get('confidence', 0) > 0:
+                # BERT分析成功，映射情绪类型
+                emotion_mapping = {
+                    'positive': 'happiness',
+                    'negative': 'sadness', 
+                    'neutral': 'neutral',
+                    'anger': 'anger',
+                    'fear': 'anxiety',  # 将恐惧映射为焦虑
+                    'sadness': 'depression',  # 将悲伤映射为抑郁
+                    'joy': 'happiness'
+                }
+                
+                bert_emotion = bert_result.get('dominant_emotion', 'neutral')  # 修复字段名
+                mapped_emotion = emotion_mapping.get(bert_emotion, 'neutral')
+                confidence = bert_result.get('confidence', 0.5)
+                
+                logger.info(f"BERT情感分析结果: {bert_emotion} -> {mapped_emotion} (置信度: {confidence})")
+                
+                return {
+                    "dominant_emotion": mapped_emotion,
+                    "emotion_intensity": confidence,
+                    "detected_emotions": {mapped_emotion: confidence},
+                    "confidence": confidence,
+                    "analysis_method": "bert",
+                    "bert_details": bert_result
+                }
+            else:
+                # BERT分析失败，使用关键词分析作为后备
+                logger.warning("BERT分析失败，使用关键词分析")
+                return await self._fallback_emotion_analysis(message)
+                
+        except Exception as e:
+            logger.warning(f"BERT情感分析异常: {e}")
+            logger.warning(f"异常详情: {str(e)}")
+            # 使用关键词分析作为后备
+            logger.info("使用fallback情感分析方法")
+            return await self._fallback_emotion_analysis(message)
+    
+    async def _fallback_emotion_analysis(self, message: str) -> Dict[str, Any]:
+        """关键词情感分析（后备方案）"""
+        logger.info(f"执行fallback情感分析，文本: '{message}'")
         message_lower = message.lower()
         
         # 情绪关键词
@@ -244,22 +312,26 @@ class AICounselingService:
             dominant_emotion = "neutral"
             emotion_intensity = 0.0
         
-        return {
+        result = {
             "dominant_emotion": dominant_emotion,
             "emotion_intensity": emotion_intensity,
             "detected_emotions": detected_emotions,
-            "confidence": 0.8
+            "confidence": 0.6,  # 关键词分析的置信度较低
+            "analysis_method": "keyword_fallback"
         }
+        logger.info(f"fallback情感分析结果: {result}")
+        return result
     
     async def _assess_risk_level(self, message: str, emotion_analysis: Dict[str, Any]) -> Dict[str, Any]:
         """评估风险等级"""
         message_lower = message.lower()
         
-        # 高风险关键词
+        # 高风险关键词 - 增强版
         high_risk_keywords = [
-            "自杀", "死亡", "不想活", "结束生命", "结束一切", "想死",
+            "自杀", "死亡", "不想活", "结束生命", "结束一切", "想死", "我想死", "我要死",
             "伤害自己", "自残", "割腕", "上吊", "跳楼", "活着没有意义",
-            "死了算了", "一了百了", "去死", "轻生"
+            "死了算了", "一了百了", "去死", "轻生", "再见了，人生",
+            "结束这一切", "不想活下去", "想要死去", "活不下去", "让我死"
         ]
         
         # 中风险关键词
@@ -288,10 +360,10 @@ class AICounselingService:
         if emotion_intensity > 0.7:
             risk_score += 1
         
-        # 确定风险等级
-        if risk_score >= 5:
+        # 确定风险等级 - 调整阈值让危机关键词直接触发高风险
+        if risk_score >= 3:  # 任何高风险关键词都触发高风险
             risk_level = "high"
-        elif risk_score >= 3:
+        elif risk_score >= 2:
             risk_level = "medium"
         elif risk_score >= 1:
             risk_level = "low"
@@ -307,25 +379,115 @@ class AICounselingService:
     
     async def _generate_ai_response(self, user_message: str, emotion_analysis: Dict[str, Any], 
                                   risk_assessment: Dict[str, Any], session: Dict[str, Any]) -> Dict[str, Any]:
-        """生成AI回复"""
+        """根据BERT情感分析结果生成AI回复"""
         dominant_emotion = emotion_analysis.get("dominant_emotion", "neutral")
         risk_level = risk_assessment.get("risk_level", "low")
+        analysis_method = emotion_analysis.get("analysis_method", "unknown")
+        confidence = emotion_analysis.get("confidence", 0.5)
+        
+        # 记录BERT分析结果
+        if analysis_method == "bert":
+            logger.info(f"使用BERT情感分析结果生成回复: {dominant_emotion} (置信度: {confidence})")
         
         # 高风险情况优先处理
         if risk_level == "high":
             response_text = self._generate_high_risk_response(user_message)
         else:
-            # 尝试使用配置的AI服务生成回复
+            # 根据情感分析结果调整AI回复策略
+            emotion_context = self._build_emotion_context(emotion_analysis)
+            
+            # 尝试使用配置的AI服务生成回复，传入情感上下文
             response_text = await self._generate_ai_response_with_fallback(
-                user_message, emotion_analysis, session
+                user_message, emotion_analysis, session, emotion_context
             )
+        
+        # 检查是否应该完成评估并跳转
+        redirect_action = self._check_assessment_completion(session, emotion_analysis, risk_assessment)
         
         return {
             "message": response_text,
             "emotion_analysis": emotion_analysis,
             "risk_assessment": risk_assessment,
-            "session_id": session["session_id"]
+            "session_id": session["session_id"],
+            "redirect_action": redirect_action
         }
+    
+    def _check_assessment_completion(self, session: Dict[str, Any], 
+                                   emotion_analysis: Dict[str, Any], 
+                                   risk_assessment: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """检查AI评估是否应该完成并跳转到传统量表"""
+        conversation_history = session.get("conversation_history", [])
+        
+        # 只计算用户消息的数量（真实的对话轮数）
+        user_message_count = len([msg for msg in conversation_history if msg.get("role") == "user"])
+        
+        # 评估完成条件：用户对话轮数达到6轮或满足特定条件
+        should_complete = False
+        completion_reason = ""
+        
+        logger.info(f"评估完成检查: 用户消息数={user_message_count}, 总历史记录数={len(conversation_history)}")
+        
+        if user_message_count >= 6:
+            should_complete = True
+            completion_reason = "达到预设对话轮数"
+        
+        # 也可以基于其他条件完成评估
+        elif user_message_count >= 4:
+            # 检查是否已经涵盖足够的评估维度
+            emotions_covered = set()
+            risk_levels_seen = set()
+            
+            for conv in session.get("conversation_history", []):
+                if "emotion_analysis" in conv:
+                    emotions_covered.add(conv["emotion_analysis"].get("dominant_emotion", ""))
+                if "risk_assessment" in conv:
+                    risk_levels_seen.add(conv["risk_assessment"].get("risk_level", ""))
+            
+            # 如果涵盖了多种情绪状态且有足够对话
+            if len(emotions_covered) >= 2 and user_message_count >= 5:
+                should_complete = True
+                completion_reason = "评估维度充分"
+        
+        if should_complete:
+            # 生成完成消息
+            completion_message = "非常感谢您的耐心配合！通过我们的深入对话，我已经对您的心理状态有了全面的了解。现在让我为您生成AI评估报告，然后我们将进入标准化量表评估阶段，这样可以为您提供更准确、更全面的心理健康评估。"
+            
+            return {
+                "type": "complete_assessment",
+                "message": completion_message,
+                "redirect_to": "/student/assessment",
+                "reason": completion_reason,
+                "conversation_count": user_message_count,
+                "delay": 3000  # 3秒后跳转
+            }
+        
+        return None
+
+    def _build_emotion_context(self, emotion_analysis: Dict[str, Any]) -> str:
+        """根据BERT分析结果构建情感上下文"""
+        dominant_emotion = emotion_analysis.get("dominant_emotion", "neutral")
+        confidence = emotion_analysis.get("confidence", 0.5)
+        analysis_method = emotion_analysis.get("analysis_method", "unknown")
+        
+        # 根据情绪类型和置信度构建上下文提示
+        emotion_prompts = {
+            "depression": f"用户表现出抑郁情绪（置信度: {confidence:.2f}），需要温暖、理解和支持的回应",
+            "anxiety": f"用户表现出焦虑情绪（置信度: {confidence:.2f}），需要安抚、理解和实用建议",
+            "anger": f"用户表现出愤怒情绪（置信度: {confidence:.2f}），需要冷静、理解和引导",
+            "sadness": f"用户表现出悲伤情绪（置信度: {confidence:.2f}），需要同理心和温暖支持",
+            "happiness": f"用户表现出积极情绪（置信度: {confidence:.2f}），可以分享他们的快乐并提供正面引导",
+            "neutral": f"用户情绪相对平稳（置信度: {confidence:.2f}），可以进行正常的心理评估对话"
+        }
+        
+        base_context = emotion_prompts.get(dominant_emotion, "用户情绪需要进一步了解")
+        
+        # 如果使用了BERT分析，添加额外的上下文信息
+        if analysis_method == "bert" and confidence > 0.7:
+            base_context += "。BERT分析显示情绪识别置信度较高，请重点关注这一情绪状态"
+        elif analysis_method == "bert" and confidence < 0.5:
+            base_context += "。BERT分析显示情绪识别存在不确定性，建议进一步探索用户的真实感受"
+        
+        return base_context
     
     def _generate_high_risk_response(self, user_message: str) -> str:
         """生成高风险情况回复"""
@@ -474,17 +636,36 @@ class AICounselingService:
         self,
         user_message: str,
         emotion_analysis: Dict[str, Any],
-        session: Dict[str, Any]
+        session: Dict[str, Any],
+        emotion_context: str = None
     ) -> str:
-        """使用多AI服务回退机制生成回复"""
+        """使用多AI服务回退机制生成回复，结合BERT情感分析"""
         
         context = {
             'emotion_state': emotion_analysis.get('dominant_emotion', 'neutral'),
             'risk_level': 'low',  # 这里传入的是非高风险情况
-            'emotion_intensity': emotion_analysis.get('emotion_intensity', 0.5)
+            'emotion_intensity': emotion_analysis.get('emotion_intensity', 0.5),
+            'analysis_method': emotion_analysis.get('analysis_method', 'unknown'),
+            'confidence': emotion_analysis.get('confidence', 0.5)
         }
         
+        # 添加BERT情感上下文到提示中
+        if emotion_context:
+            context['emotion_context'] = emotion_context
+        
         conversation_history = session.get("conversation_history", [])
+        
+        # 提取已问过的问题，避免重复
+        asked_questions = []
+        for msg in conversation_history:
+            if msg.get("role") == "assistant" and "?" in msg.get("message", ""):
+                # 提取问题句子
+                questions = [q.strip() + "?" for q in msg["message"].split("?") if q.strip()]
+                asked_questions.extend(questions)
+        
+        # 将已问问题添加到上下文中
+        if asked_questions:
+            context['previous_questions'] = asked_questions[-5:]  # 只保留最近5个问题
         
         # 转换对话历史为简单格式（避免datetime序列化问题）
         simple_history = []
@@ -618,14 +799,16 @@ class AICounselingService:
     
     async def _generate_session_summary(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """生成会话总结"""
-        conversation_count = len(session["conversation_history"])
+        # 只计算用户消息数量（与评估完成检查保持一致）
+        user_messages = [msg for msg in session["conversation_history"] if msg["role"] == "user"]
+        ai_messages = [msg for msg in session["conversation_history"] if msg["role"] == "assistant"]
+        conversation_count = len(user_messages)  # 修改为只计算用户消息
+        
         duration = None
         if "end_time" in session and "start_time" in session:
             duration = (session["end_time"] - session["start_time"]).total_seconds() / 60
         
         # 分析对话内容
-        user_messages = [msg for msg in session["conversation_history"] if msg["role"] == "user"]
-        ai_messages = [msg for msg in session["conversation_history"] if msg["role"] == "assistant"]
         
         # 情绪变化趋势
         emotion_trend = []
@@ -745,10 +928,22 @@ class AICounselingService:
             ).first()
             
             if db_session:
-                db_session.conversation_history = conversation_data.get("conversation_history", [])
+                # 序列化conversation_history中的datetime对象
+                conversation_history = conversation_data.get("conversation_history", [])
+                serialized_history = []
+                for entry in conversation_history:
+                    serialized_entry = entry.copy()
+                    if 'timestamp' in serialized_entry and hasattr(serialized_entry['timestamp'], 'isoformat'):
+                        serialized_entry['timestamp'] = serialized_entry['timestamp'].isoformat()
+                    serialized_history.append(serialized_entry)
+                
+                db_session.conversation_history = serialized_history
                 db_session.emotion_analysis = conversation_data.get("emotion_analysis", {})
                 db_session.risk_assessment = conversation_data.get("risk_assessment", {})
                 self.db.commit()
+                logger.info(f"✅ 对话数据已成功保存到数据库，会话ID: {db_id}, 对话条数: {len(serialized_history)}")
+            else:
+                logger.warning(f"❌ 未找到数据库会话记录，ID: {db_id}")
                 
         except Exception as e:
             logger.error(f"保存对话到数据库失败: {str(e)}")
@@ -763,10 +958,21 @@ class AICounselingService:
             parts = session_id.split("_")
             if len(parts) >= 3:
                 try:
+                    expected_student_id = int(parts[2])  # session_id中的student_id
                     db_id = int(parts[-1])  # 最后一部分是数据库ID
                     db_session = self.db.query(AICounselingSession).filter(
                         AICounselingSession.id == db_id
                     ).first()
+                    
+                    # 验证student_id是否匹配
+                    if db_session and db_session.student_id != expected_student_id:
+                        logger.warning(f"会话ID不匹配: {session_id} 期望student_id={expected_student_id}, 但数据库中为{db_session.student_id}")
+                        # student_id不匹配，按student_id查找最新会话
+                        db_session = self.db.query(AICounselingSession).filter(
+                            AICounselingSession.student_id == expected_student_id,
+                            AICounselingSession.status == "active"
+                        ).order_by(AICounselingSession.created_at.desc()).first()
+                        
                 except ValueError:
                     # 如果最后一部分不是数字，尝试按学生ID查找最新会话
                     student_id = int(parts[2]) if len(parts) > 2 else 0
@@ -792,6 +998,111 @@ class AICounselingService:
             logger.error(f"从数据库加载对话失败: {str(e)}")
             
         return None
+
+    async def get_session_history(self, student_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取学生的AI咨询历史记录"""
+        if not self.db:
+            return []
+        
+        try:
+            # 从数据库获取学生的咨询会话历史
+            sessions = self.db.query(AICounselingSession).filter(
+                AICounselingSession.student_id == student_id
+            ).order_by(AICounselingSession.created_at.desc()).limit(limit).all()
+            
+            history = []
+            for session in sessions:
+                # 只计算用户消息数量（与其他地方保持一致）
+                user_msg_count = len([msg for msg in (session.conversation_history or []) if msg.get("role") == "user"])
+                
+                history.append({
+                    "session_id": f"ai_session_{student_id}_{session.id}",
+                    "start_time": session.start_time,
+                    "end_time": session.end_time,
+                    "status": session.status,
+                    "conversation_count": user_msg_count,  # 修改为只计算用户消息
+                    "final_emotion": session.emotion_analysis.get("dominant_emotion", "neutral") if session.emotion_analysis else "neutral",
+                    "risk_level": session.risk_assessment.get("risk_level", "low") if session.risk_assessment else "low"
+                })
+            
+            return history
+            
+        except Exception as e:
+            logger.error(f"获取咨询历史失败: {e}")
+            return []
+
+    async def get_intervention_suggestions(self, student_id: int) -> Dict[str, Any]:
+        """获取基于学生历史数据的干预建议"""
+        try:
+            # 获取学生最近的咨询记录
+            recent_sessions = await self.get_session_history(student_id, limit=5)
+            
+            if not recent_sessions:
+                return {
+                    "suggestions": ["建议定期进行心理健康评估", "保持积极的生活方式"],
+                    "risk_trend": "stable",
+                    "recommendation": "继续关注心理健康状态"
+                }
+            
+            # 分析风险趋势
+            risk_levels = [session.get("risk_level", "low") for session in recent_sessions]
+            high_risk_count = sum(1 for level in risk_levels if level == "high")
+            medium_risk_count = sum(1 for level in risk_levels if level == "medium")
+            
+            suggestions = []
+            if high_risk_count > 0:
+                suggestions.extend([
+                    "强烈建议寻求专业心理危机干预",
+                    "联系家人朋友获得支持",
+                    "避免独处，保持社交联系"
+                ])
+            elif medium_risk_count >= 2:
+                suggestions.extend([
+                    "建议寻求专业心理咨询",
+                    "学习情绪管理技巧",
+                    "保持规律作息"
+                ])
+            else:
+                suggestions.extend([
+                    "继续保持当前状态",
+                    "定期进行心理健康评估",
+                    "学习压力管理技巧"
+                ])
+            
+            return {
+                "suggestions": suggestions,
+                "risk_trend": "increasing" if high_risk_count > 0 else "stable",
+                "recommendation": "继续关注心理健康状态" if high_risk_count == 0 else "需要专业干预",
+                "recent_sessions_count": len(recent_sessions)
+            }
+            
+        except Exception as e:
+            logger.error(f"获取干预建议失败: {e}")
+            return {
+                "suggestions": ["建议寻求专业心理咨询"],
+                "risk_trend": "unknown",
+                "recommendation": "需要进一步评估"
+            }
+
+    async def process_realtime_message(self, session_id: str, message: str) -> Dict[str, Any]:
+        """处理实时消息（用于WebSocket）"""
+        try:
+            # 使用现有的对话处理方法
+            response = await self.continue_conversation(session_id, message)
+            return {
+                "message": response.get("message", ""),
+                "emotion_analysis": response.get("emotion_analysis", {}),
+                "risk_assessment": response.get("risk_assessment", {}),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"处理实时消息失败: {e}")
+            return {
+                "message": "抱歉，处理您的消息时出现了问题，请稍后再试。",
+                "emotion_analysis": {},
+                "risk_assessment": {"risk_level": "low"},
+                "timestamp": datetime.utcnow().isoformat()
+            }
 
 
 # 全局会话存储（在实际生产环境中应该使用Redis或数据库）

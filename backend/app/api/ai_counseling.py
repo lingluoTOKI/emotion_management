@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSoc
 from sqlalchemy.orm import Session
 from typing import Optional
 import json
+from datetime import datetime
 
 from app.core.database import get_db
 from app.services.auth_service import get_current_user
@@ -24,6 +25,7 @@ from app.schemas.ai_counseling import (
     RiskAssessmentRequest,
     RiskAssessmentResponse
 )
+from loguru import logger
 
 router = APIRouter()
 
@@ -60,6 +62,20 @@ async def start_ai_counseling(
         session_data=session_data["session_data"]
     )
 
+@router.post("/test/emotion", response_model=dict)
+async def test_emotion_analysis(
+    data: dict,
+    db: Session = Depends(get_db)
+):
+    """临时测试端点 - 无需认证"""
+    print(f"🧪🧪🧪 测试端点被调用！message: '{data.get('message')}'")
+    
+    ai_service = AICounselingService(db)
+    emotion_result = await ai_service._analyze_user_emotion(data.get('message', ''))
+    
+    print(f"🧪🧪🧪 测试结果: {emotion_result}")
+    return {"test_emotion_result": emotion_result}
+
 @router.post("/session/chat", response_model=AIConversationResponse)
 async def continue_ai_chat(
     chat_request: AIConversationRequest,
@@ -69,6 +85,9 @@ async def continue_ai_chat(
     """
     继续AI辅导对话
     """
+    # API调用日志
+    logger.info(f"AI咨询API被调用 - session_id: {chat_request.session_id}, message: '{chat_request.message}'")
+    
     ai_service = AICounselingService(db)
     
     # 继续对话
@@ -77,12 +96,16 @@ async def continue_ai_chat(
         chat_request.message
     )
     
+    logger.info(f"🔙 AI咨询API返回数据 - 情绪: {response_data['emotion_analysis']['dominant_emotion']}, 风险: {response_data['risk_assessment']['risk_level']}")
+    # 不再打印完整的response_data，避免datetime序列化问题
+    
     return AIConversationResponse(
         message=response_data["message"],
         emotion_analysis=response_data["emotion_analysis"],
         risk_assessment=response_data["risk_assessment"],
         session_id=chat_request.session_id,
-        emergency_alert=response_data.get("emergency_alert")
+        emergency_alert=response_data.get("emergency_alert"),
+        redirect_action=response_data.get("redirect_action")
     )
 
 @router.post("/session/end")

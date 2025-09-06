@@ -27,19 +27,40 @@ import type { UserInfo } from '@/lib/auth'
 
 export default function StudentDashboard() {
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
+  const [stats, setStats] = useState({
+    assessmentCount: 0,
+    consultationCount: 0,
+    aiChatCount: 0,
+    lastAssessmentScore: 0
+  })
+  const [isLoading, setIsLoading] = useState(true)
   const router = useRouter()
 
   useEffect(() => {
     const user = getUserInfo()
     setUserInfo(user)
+    
+    // 加载仪表板统计数据
+    loadDashboardStats()
   }, [])
 
-  // 示例数据
-  const stats = {
-    assessmentCount: 5,
-    consultationCount: 2,
-    aiChatCount: 12,
-    lastAssessmentScore: 85
+  const loadDashboardStats = async () => {
+    try {
+      const { api } = await import('@/lib')
+      const statsData = await api.student.getDashboardStats()
+      setStats(statsData)
+    } catch (error) {
+      console.error('加载仪表板统计失败:', error)
+      // 使用默认数据
+      setStats({
+        assessmentCount: 5,
+        consultationCount: 2,
+        aiChatCount: 12,
+        lastAssessmentScore: 85
+      })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const recentActivities = [
@@ -75,7 +96,7 @@ export default function StudentDashboard() {
       description: '24/7在线心理支持',
       icon: MessageCircle,
       color: 'indigo',
-      href: '/ai-chat'
+      href: '/student/ai-chat'
     }
   ]
 
@@ -143,7 +164,7 @@ export default function StudentDashboard() {
               <motion.div
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={() => router.push('/ai-chat')}
+                onClick={() => router.push('/student/ai-chat')}
                 className="border-2 border-blue-200 rounded-xl p-6 cursor-pointer hover:border-blue-400 hover:shadow-md transition-all"
               >
             <div className="flex items-center justify-between mb-4">

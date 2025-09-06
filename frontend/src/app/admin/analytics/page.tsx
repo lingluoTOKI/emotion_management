@@ -18,6 +18,19 @@ import {
 import { useRouter } from 'next/navigation'
 import DashboardLayout from '@/components/DashboardLayout'
 import { RequireRole } from '@/components/AuthGuard'
+import EChartsWordCloud from '@/components/EChartsWordCloud'
+
+// 统一的系统配色方案
+const systemColors = {
+  primary: ['#3B82F6', '#1D4ED8', '#1E40AF'], // 蓝色主色调
+  secondary: ['#10B981', '#059669', '#047857'], // 绿色辅助色
+  accent: ['#F59E0B', '#D97706', '#B45309'], // 橙色强调色
+  purple: ['#8B5CF6', '#7C3AED', '#6D28D9'], // 紫色
+  pink: ['#EC4899', '#DB2777', '#BE185D'], // 粉色
+  indigo: ['#6366F1', '#4F46E5', '#4338CA'], // 靛色
+  teal: ['#14B8A6', '#0D9488', '#0F766E'], // 青色
+  slate: ['#64748B', '#475569', '#334155'] // 灰色
+};
 
 // 模拟数据 - 在实际应用中从API获取
 const mockData = {
@@ -39,13 +52,13 @@ const mockData = {
   
   // 南丁格尔玫瑰图数据 - 咨询师流派被咨询次数
   therapyTypes: [
-    { name: '认知行为疗法', value: 145, color: '#FF6B6B' },
-    { name: '人本主义疗法', value: 132, color: '#4ECDC4' },
-    { name: '精神分析疗法', value: 98, color: '#45B7D1' },
-    { name: '家庭系统疗法', value: 76, color: '#96CEB4' },
-    { name: '正念疗法', value: 65, color: '#FECA57' },
-    { name: '艺术疗法', value: 43, color: '#FF9FF3' },
-    { name: '行为疗法', value: 38, color: '#54A0FF' }
+    { name: '认知行为疗法', value: 145, color: systemColors.primary[0] },
+    { name: '人本主义疗法', value: 132, color: systemColors.secondary[0] },
+    { name: '精神分析疗法', value: 98, color: systemColors.accent[0] },
+    { name: '家庭系统疗法', value: 76, color: systemColors.purple[0] },
+    { name: '正念疗法', value: 65, color: systemColors.pink[0] },
+    { name: '艺术疗法', value: 43, color: systemColors.indigo[0] },
+    { name: '行为疗法', value: 38, color: systemColors.teal[0] }
   ],
   
   // 饼状图数据 - 评估报告准确率
@@ -215,7 +228,16 @@ export default function AdminAnalytics() {
               description="基于咨询记录的问题关键词统计"
               icon={Cloud}
             >
-              <WordCloudChart data={mockData.wordCloud} />
+              {chartLoading ? (
+                <ChartLoader />
+              ) : (
+                <EChartsWordCloud 
+                  words={mockData.wordCloud} 
+                  emotion="anxious"
+                  width={500}
+                  height={240}
+                />
+              )}
             </ChartCard>
 
             {/* 南丁格尔玫瑰图 */}
@@ -239,7 +261,11 @@ export default function AdminAnalytics() {
               description="学生对评估报告准确性的反馈统计"
               icon={PieChart}
             >
-              <AccuracyPieChart data={mockData.assessmentAccuracy} />
+              {chartLoading ? (
+                <ChartLoader />
+              ) : (
+                <AccuracyPieChart data={mockData.assessmentAccuracy} />
+              )}
             </ChartCard>
 
             {/* 条形图 */}
@@ -248,7 +274,11 @@ export default function AdminAnalytics() {
               description="基于学生满意度调查的咨询师效果排名"
               icon={BarChart3}
             >
-              <CounselorBarChart data={mockData.counselorEffectiveness} />
+              {chartLoading ? (
+                <ChartLoader />
+              ) : (
+                <CounselorBarChart data={mockData.counselorEffectiveness} />
+              )}
             </ChartCard>
           </div>
 
@@ -339,40 +369,6 @@ function ChartLoader() {
   );
 }
 
-// 词云图组件（简化版）
-function WordCloudChart({ data }: { data: any[] }) {
-  const maxValue = Math.max(...data.map(item => item.value))
-  
-  return (
-    <div className="relative h-64 flex flex-wrap items-center justify-center gap-2 p-4">
-      {data.map((word, index) => {
-        const size = Math.max(12, (word.value / maxValue) * 32)
-        const colors = {
-          emotion: 'text-red-500',
-          academic: 'text-blue-500', 
-          social: 'text-green-500',
-          physical: 'text-purple-500',
-          family: 'text-orange-500',
-          behavior: 'text-indigo-500'
-        }
-        
-        return (
-          <motion.span
-            key={index}
-            initial={{ opacity: 0, scale: 0 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: index * 0.1 }}
-            className={`font-bold cursor-pointer hover:scale-110 transition-transform ${colors[word.category as keyof typeof colors] || 'text-gray-500'}`}
-            style={{ fontSize: `${size}px` }}
-            title={`${word.text}: ${word.value}次`}
-          >
-            {word.text}
-          </motion.span>
-        )
-      })}
-    </div>
-  )
-}
 
 // 南丁格尔玫瑰图组件（增强版）
 function RoseChart({ data }: { data: any[] }) {
@@ -381,7 +377,7 @@ function RoseChart({ data }: { data: any[] }) {
   
   return (
     <div className="h-64 flex flex-col md:flex-row items-center justify-center p-2">
-      <div className="relative w-full max-w-[200px] h-[200px] mb-4 md:mb-0 md:mr-4">
+      <div className="relative w-full max-w-[240px] h-[240px] mb-4 md:mb-0 md:mr-6">
         <svg viewBox="0 0 200 200" className="w-full h-full">
           {/* 绘制网格线 */}
           {[0.25, 0.5, 0.75, 1].map((percent, i) => {
@@ -478,44 +474,152 @@ function RoseChart({ data }: { data: any[] }) {
   )
 }
 
-// 准确率饼状图组件
+// 准确率饼状图组件 - 现代化设计
 function AccuracyPieChart({ data }: { data: any }) {
   const accuratePercentage = (data.accurate / data.total) * 100
   const inaccuratePercentage = (data.inaccurate / data.total) * 100
   
+  // 计算饼图的路径
+  const radius = 85
+  const circumference = 2 * Math.PI * radius
+  const accurateArc = (accuratePercentage / 100) * circumference
+  const inaccurateArc = (inaccuratePercentage / 100) * circumference
+  
   return (
-    <div className="h-64 flex items-center justify-center">
-      <div className="relative w-40 h-40">
-        <svg viewBox="0 0 200 200" className="w-full h-full">
-          <circle cx="100" cy="100" r="80" fill="#10B981" opacity={0.8} />
+    <div className="h-64 flex items-center justify-center relative">
+      {/* 主饼图 */}
+      <div className="relative w-48 h-48">
+        <svg viewBox="0 0 200 200" className="w-full h-full transform -rotate-90">
+          {/* 背景圆环 */}
           <circle
             cx="100"
             cy="100"
-            r="80"
-            fill="transparent"
-            stroke="#EF4444"
-            strokeWidth="160"
-            strokeDasharray={`${inaccuratePercentage * 5.03} ${accuratePercentage * 5.03}`}
-            strokeDashoffset="125.75"
-            opacity={0.8}
+            r={radius}
+            fill="none"
+            stroke="#f3f4f6"
+            strokeWidth="15"
           />
+          
+          {/* 准确部分 */}
+          <motion.circle
+            cx="100"
+            cy="100"
+            r={radius}
+            fill="none"
+            stroke="url(#accurateGradient)"
+            strokeWidth="15"
+            strokeLinecap="round"
+            strokeDasharray={`${accurateArc} ${circumference}`}
+            strokeDashoffset="0"
+            initial={{ strokeDasharray: `0 ${circumference}` }}
+            animate={{ strokeDasharray: `${accurateArc} ${circumference}` }}
+            transition={{ duration: 1.5, ease: "easeInOut" }}
+            className="drop-shadow-lg"
+          />
+          
+          {/* 不准确部分 */}
+          <motion.circle
+            cx="100"
+            cy="100"
+            r={radius}
+            fill="none"
+            stroke="url(#inaccurateGradient)"
+            strokeWidth="15"
+            strokeLinecap="round"
+            strokeDasharray={`${inaccurateArc} ${circumference}`}
+            strokeDashoffset={-accurateArc}
+            initial={{ strokeDasharray: `0 ${circumference}` }}
+            animate={{ strokeDasharray: `${inaccurateArc} ${circumference}` }}
+            transition={{ duration: 1.5, ease: "easeInOut", delay: 0.3 }}
+            className="drop-shadow-lg"
+          />
+          
+          {/* 渐变定义 */}
+          <defs>
+            <linearGradient id="accurateGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor={systemColors.secondary[0]} />
+              <stop offset="100%" stopColor={systemColors.secondary[1]} />
+            </linearGradient>
+            <linearGradient id="inaccurateGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor={systemColors.accent[0]} />
+              <stop offset="100%" stopColor={systemColors.accent[1]} />
+            </linearGradient>
+          </defs>
         </svg>
+        
+        {/* 中心数据显示 */}
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-2xl font-bold text-gray-900">{accuratePercentage.toFixed(1)}%</span>
-          <span className="text-sm text-gray-500">准确率</span>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.5 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.8, delay: 0.5 }}
+            className="text-center"
+          >
+            <div className="text-3xl font-bold text-gray-900 mb-1">
+              {accuratePercentage.toFixed(1)}%
+            </div>
+            <div className="text-sm text-gray-500 font-medium">
+              总体准确率
+            </div>
+          </motion.div>
         </div>
       </div>
-      <div className="ml-6 space-y-3">
-        <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 rounded-full bg-green-500" />
-          <span className="text-sm text-gray-700">准确</span>
-          <span className="text-sm text-gray-500">({data.accurate})</span>
-        </div>
-        <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 rounded-full bg-red-500" />
-          <span className="text-sm text-gray-700">不准确</span>
-          <span className="text-sm text-gray-500">({data.inaccurate})</span>
-        </div>
+      
+      {/* 图例和统计信息 */}
+      <div className="ml-8 space-y-4">
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.6, delay: 0.8 }}
+          className="space-y-3"
+        >
+          {/* 准确统计 */}
+          <div className="flex items-center space-x-3 p-3 bg-green-50 rounded-lg border border-green-200">
+            <div 
+              className="w-4 h-4 rounded-full shadow-md" 
+              style={{ background: `linear-gradient(to bottom right, ${systemColors.secondary[0]}, ${systemColors.secondary[1]})` }}
+            />
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-green-800">准确评估</div>
+              <div className="text-xs text-green-600">
+                {data.accurate} 份 ({accuratePercentage.toFixed(1)}%)
+              </div>
+            </div>
+            <div className="text-lg font-bold text-green-700">
+              {data.accurate}
+            </div>
+          </div>
+          
+          {/* 不准确统计 */}
+          <div className="flex items-center space-x-3 p-3 bg-orange-50 rounded-lg border border-orange-200">
+            <div 
+              className="w-4 h-4 rounded-full shadow-md"
+              style={{ background: `linear-gradient(to bottom right, ${systemColors.accent[0]}, ${systemColors.accent[1]})` }}
+            />
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-orange-800">待改进</div>
+              <div className="text-xs text-orange-600">
+                {data.inaccurate} 份 ({inaccuratePercentage.toFixed(1)}%)
+              </div>
+            </div>
+            <div className="text-lg font-bold text-orange-700">
+              {data.inaccurate}
+            </div>
+          </div>
+        </motion.div>
+        
+        {/* 总计信息 */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 1.0 }}
+          className="pt-3 border-t border-gray-200"
+        >
+          <div className="text-center">
+            <div className="text-sm text-gray-500">总评估数</div>
+            <div className="text-xl font-bold text-gray-900">{data.total}</div>
+          </div>
+        </motion.div>
       </div>
     </div>
   )
@@ -539,8 +643,11 @@ function CounselorBarChart({ data }: { data: any[] }) {
           <div className="flex-1 relative">
             <div className="w-full bg-gray-200 rounded-full h-6">
               <div
-                className="bg-gradient-to-r from-blue-500 to-blue-600 h-6 rounded-full flex items-center justify-end pr-2 transition-all duration-500"
-                style={{ width: `${(counselor.satisfactionRate / maxRate) * 100}%` }}
+                className="h-6 rounded-full flex items-center justify-end pr-2 transition-all duration-500"
+                style={{ 
+                  width: `${(counselor.satisfactionRate / maxRate) * 100}%`,
+                  background: `linear-gradient(to right, ${systemColors.primary[0]}, ${systemColors.primary[1]})`
+                }}
               >
                 <span className="text-xs text-white font-medium">
                   {counselor.satisfactionRate}%

@@ -30,6 +30,7 @@ class AIConversationResponse(BaseModel):
     risk_assessment: Dict[str, Any]
     session_id: str
     emergency_alert: Optional[Dict[str, Any]] = None
+    redirect_action: Optional[Dict[str, Any]] = None  # 新增：跳转指令
 
 class AISessionEnd(BaseModel):
     """结束AI咨询会话模型"""
@@ -79,3 +80,17 @@ class InterventionSuggestion(BaseModel):
     long_term_goals: List[str]
     responsible_person: str
     follow_up_schedule: Dict[str, Any]
+
+class ComprehensiveAssessmentRequest(BaseModel):
+    """综合评估请求模型"""
+    session_id: str
+    scale_results: Optional[Dict[str, Any]] = None
+    ai_assessment: Optional[Dict[str, Any]] = None
+    include_conversation: bool = True
+
+class ComprehensiveAssessmentResponse(BaseModel):
+    """综合评估响应模型"""
+    assessment_id: str
+    session_id: str
+    assessment_report: Dict[str, Any]
+    created_at: datetime

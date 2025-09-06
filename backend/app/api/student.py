@@ -6,6 +6,7 @@ Student API Routes
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from pydantic import BaseModel
 import json
 
 from app.core.database import get_db
@@ -64,21 +65,38 @@ async def start_assessment(
             detail=f"创建评估失败: {str(e)}"
         )
 
+class SubmitAnswerRequest(BaseModel):
+    question_id: str
+    answer: str
+
 @router.post("/assessment/{assessment_id}/submit")
 async def submit_assessment_answer(
     assessment_id: int,
-    question_id: str,
-    answer: str,
+    answer_data: SubmitAnswerRequest,
     current_user: User = Depends(get_student_user),
     db: Session = Depends(get_db)
 ):
     """
     提交评估问题答案
     """
-    student_service = StudentService(db)
-    return await student_service.submit_answer(
-        assessment_id, question_id, answer, current_user.id
-    )
+    try:
+        student_service = StudentService(db)
+        result = await student_service.submit_answer(
+            assessment_id, answer_data.question_id, answer_data.answer, current_user.id
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"提交评估答案失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"提交答案失败: {str(e)}"
+        )
 
 @router.post("/assessment/{assessment_id}/complete")
 async def complete_assessment(

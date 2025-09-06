@@ -14,6 +14,7 @@ from app.models.user import User, UserRole, Counselor, CounselorSchool
 from app.models.consultation import Consultation, ConsultationStatus
 from app.models.assessment import Assessment
 from app.services.admin_service import AdminService
+from app.services.visualization_service import VisualizationService
 from app.schemas.admin import (
     DashboardData, 
     CounselorStat, 
@@ -22,6 +23,8 @@ from app.schemas.admin import (
 )
 
 router = APIRouter()
+
+# 添加可视化相关的路由
 
 def get_admin_user(current_user: User = Depends(get_current_user)):
     """验证管理员权限"""

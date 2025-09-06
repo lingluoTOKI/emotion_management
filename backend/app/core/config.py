@@ -39,11 +39,7 @@ class Settings(BaseSettings):
     RISK_THRESHOLD: float = 0.7  # 风险阈值
     
     # CORS配置
-    ALLOWED_ORIGINS: List[str] = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000"
-    ]
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://frontend:3000"
     
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"

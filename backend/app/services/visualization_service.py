@@ -15,6 +15,7 @@ import jieba
 import redis
 
 from app.models.user import Counselor, CounselorSchool, Student
+from app.services.emotion_shape_generator import EmotionShapeGenerator
 from app.models.consultation import Consultation, ConsultationStatus
 from app.models.assessment import Assessment
 from app.core.config import settings
@@ -28,6 +29,8 @@ class WordCloudData:
     total_keywords: int
     update_time: datetime
     time_range: str
+    shape_mask: Optional[str] = None  # Base64编码的形状蒙版
+    dominant_emotion: Optional[str] = None  # 主导情绪
 
 
 @dataclass
@@ -62,6 +65,9 @@ class VisualizationService:
     
     def __init__(self, db: Session):
         self.db = db
+        
+        # 初始化情绪形状生成器
+        self.shape_generator = EmotionShapeGenerator()
         
         # Redis缓存客户端
         try:
@@ -197,11 +203,23 @@ class VisualizationService:
                 'color': self._get_word_color(weight)
             })
         
+        # 根据关键词确定主导情绪并生成对应形状
+        top_keywords = [item['word'] for item in words_data[:10]]  # 取前10个关键词
+        dominant_emotion = self.shape_generator.get_emotion_from_keywords(top_keywords)
+        
+        # 生成情绪形状蒙版
+        shape_mask = self.shape_generator.generate_shape_mask(dominant_emotion, top_keywords)
+        shape_mask_base64 = self.shape_generator.save_mask_as_base64(shape_mask)
+        
+        logger.info(f"词云图检测到主导情绪: {dominant_emotion}，生成对应形状蒙版")
+        
         wordcloud_data = WordCloudData(
             words=words_data,
             total_keywords=len(all_keywords),
             update_time=datetime.now(),
-            time_range=f"{start_date.date()} ~ {end_date.date()}"
+            time_range=f"{start_date.date()} ~ {end_date.date()}",
+            shape_mask=shape_mask_base64,
+            dominant_emotion=dominant_emotion
         )
         
         # 缓存结果

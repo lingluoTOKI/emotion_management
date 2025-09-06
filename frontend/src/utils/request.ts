@@ -5,9 +5,10 @@
  * 对应文档：技术落地 与 代码规范 3-1
  */
 
-export interface RequestOptions extends RequestInit {
+export interface RequestOptions extends Omit<RequestInit, 'body'> {
   auth?: boolean
   baseUrl?: string
+  body?: any
 }
 
 const DEFAULT_BASE_URL =
@@ -42,7 +43,7 @@ export async function request<T = any>(path: string, options: RequestOptions = {
   const resp = await fetch(url, {
     ...options,
     headers,
-    body: isJsonBody ? JSON.stringify(options.body) : options.body,
+    body: isJsonBody ? JSON.stringify(options.body) : options.body as BodyInit,
   })
 
   // 统一错误处理

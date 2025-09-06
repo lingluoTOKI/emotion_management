@@ -17,6 +17,7 @@ import { RequireRole } from '@/components/AuthGuard'
 import { getUserInfo } from '@/lib/auth'
 import type { UserInfo } from '@/lib/auth'
 import { api, type AIStartSessionResponse, type AIChatResponse } from '@/lib'
+import { handleError, showSuccess } from '@/utils/errorHandler'
 
 interface Message {
   id: string
@@ -37,9 +38,35 @@ export default function AIChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // 格式化Markdown文本
+  const formatMarkdown = (text: string): string => {
+    return text
+      // 粗体 **text** -> <strong>text</strong>
+      .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
+      // 斜体 *text* -> <em>text</em> (但要避免与粗体冲突)
+      .replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, '<em class="italic">$1</em>')
+      // 代码 `code` -> <code>code</code>
+      .replace(/`(.*?)`/g, '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm font-mono">$1</code>')
+      // 序号列表 ① ② ③ 等，添加样式和间距
+      .replace(/(①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩)/g, '<span class="inline-block font-medium text-blue-600 mr-1">$1</span>')
+      // 项目符号 • 
+      .replace(/•/g, '<span class="text-blue-500 mr-1">•</span>')
+      // 破折号 —— 
+      .replace(/——/g, '<span class="text-gray-600">——</span>')
+      // 问号 ？
+      .replace(/？/g, '<span class="text-blue-600">？</span>')
+      // 换行符（放在最后处理）
+      .replace(/\n/g, '<br>')
+  }
+
   useEffect(() => {
     const user = getUserInfo()
     setUserInfo(user)
+    
+    // 确保inputMessage状态正确初始化
+    if (inputMessage === null || inputMessage === undefined) {
+      setInputMessage('')
+    }
     
     // 初始欢迎消息
     setMessages([
@@ -178,7 +205,7 @@ export default function AIChatPage() {
   }
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || isLoading) return
+    if (!inputMessage || !inputMessage.trim() || isLoading) return
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -193,14 +220,38 @@ export default function AIChatPage() {
     setIsTyping(true)
 
     try {
+      // 检查认证状态
+      const token = localStorage.getItem('access_token')
+      console.log('🔐 检查认证状态:', token ? `Token存在: ${token.slice(0, 20)}...` : '❌ 未找到Token')
+      
+      if (!token) {
+        throw new Error('用户未登录，请先登录后再使用AI助手')
+      }
+
+      // 检查token类型并给出相应提示
+      if (token.startsWith('mock_token_')) {
+        throw new Error('检测到测试token，请使用真实账号登录以使用AI功能')
+      }
+      
+      if (token.startsWith('temp_token_')) {
+        throw new Error('当前使用临时登录模式，AI功能受限。请确保后端服务正常运行并重新登录以获得完整功能。')
+      }
+
       // 确保会话存在
       let currentSessionId = sessionId
       if (!currentSessionId) {
         console.log('🚀 创建新的AI会话...')
+        console.log('📋 会话请求数据:', { 
+          problem_type: '心理健康咨询', 
+          initial_message: null 
+        })
+        
         const startData = await api.ai.startSession({ 
           problem_type: '心理健康咨询', 
           initial_message: null 
         })
+        
+        console.log('📦 会话创建响应:', startData)
         currentSessionId = startData.session_id
         if (!currentSessionId) throw new Error('创建会话失败：未返回session_id')
         setSessionId(currentSessionId)
@@ -211,7 +262,8 @@ export default function AIChatPage() {
       console.log('💬 发送消息到AI服务...', {
         session_id: currentSessionId,
         message: userMessage.content.slice(0, 50) + '...',
-        backend_url: 'http://localhost:8000'
+        backend_url: 'http://localhost:8000',
+        has_token: !!token
       })
       
       const chatData = await api.ai.chat({ 
@@ -237,26 +289,30 @@ export default function AIChatPage() {
       }, 800)
 
     } catch (error: any) {
-      console.error('🚨 AI聊天错误:', error)
+      handleError(error, 'AI聊天')
       setIsTyping(false)
       
-      // 详细的错误日志，帮助调试
-      console.log('错误详情:', {
-        message: error.message,
-        status: error.status,
-        response: error.response,
-        stack: error.stack
-      })
-      
       // 检查是否是认证错误
-      if (error.message && error.message.includes('401')) {
+      if (error.message && (error.message.includes('401') || error.message.includes('用户未登录'))) {
         const authMessage: Message = {
           id: (Date.now() + 1).toString(),
           type: 'ai',
-          content: '抱歉，您的登录状态已过期。请刷新页面重新登录后继续对话。',
+          content: '⚠️ 您需要先登录才能使用AI助手。请返回登录页面登录后再尝试。',
           timestamp: new Date()
         }
         setMessages(prev => [...prev, authMessage])
+        return
+      }
+
+      // 检查是否是mock token错误
+      if (error.message && error.message.includes('检测到测试token')) {
+        const mockTokenMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'ai',
+          content: '🔐 检测到您使用的是测试账号。AI功能需要真实账号的有效凭据。\n\n请：\n1️⃣ 返回登录页面\n2️⃣ 使用真实的用户名和密码登录\n3️⃣ 避免使用"快速登录"按钮\n\n真实账号示例：student1/123456',
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, mockTokenMessage])
         return
       }
       
@@ -378,7 +434,12 @@ export default function AIChatPage() {
                           </div>
                         )}
                         <div className="flex-1">
-                          <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                          <div 
+                            className="text-sm whitespace-pre-wrap"
+                            dangerouslySetInnerHTML={{
+                              __html: formatMarkdown(message.content)
+                            }}
+                          />
                           <p className={`
                             text-xs mt-2 
                             ${message.type === 'user' ? 'text-blue-100' : 'text-gray-500'}
@@ -439,10 +500,10 @@ export default function AIChatPage() {
                 </div>
                 <button
                   onClick={handleSendMessage}
-                  disabled={!inputMessage.trim() || isLoading}
+                  disabled={!inputMessage || !inputMessage.trim() || isLoading}
                   className={`
                     p-3 rounded-xl transition-all duration-200
-                    ${!inputMessage.trim() || isLoading
+                    ${!inputMessage || !inputMessage.trim() || isLoading
                       ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                       : 'bg-blue-600 text-white hover:bg-blue-700 transform hover:scale-105'}
                   `}

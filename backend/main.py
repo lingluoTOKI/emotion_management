@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from loguru import logger
 
-from app.api import auth, admin, student, consultation, ai_counseling, system, ai_service_management
+from app.api import auth, admin, student, consultation, ai_counseling, system, ai_service_management, emotion_shapes, bert_analysis, comprehensive_assessment
 from app.core.config import settings
 from app.core.database import engine
 from app.models import Base
@@ -44,10 +44,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 配置CORS中间件
+# 配置CORS中间件 - 临时允许所有来源以解决500错误时的CORS问题
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origins=settings.ALLOWED_ORIGINS.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -68,7 +68,11 @@ app.include_router(auth.router, prefix="/api/auth", tags=["认证"])
 app.include_router(admin.router, prefix="/api/admin", tags=["管理员"])
 app.include_router(student.router, prefix="/api/student", tags=["学生"])
 app.include_router(consultation.router, prefix="/api/consultation", tags=["咨询"])
+print("🔥 注册AI咨询路由: /api/ai")
 app.include_router(ai_counseling.router, prefix="/api/ai", tags=["AI辅导"])
+app.include_router(emotion_shapes.router, prefix="/api/emotion-shapes", tags=["情绪形状"])
+app.include_router(bert_analysis.router, tags=["BERT分析"])
+app.include_router(comprehensive_assessment.router, prefix="/api/comprehensive-assessment", tags=["综合心理评估"])
 
 # 旧的事件处理器已替换为lifespan函数
 
@@ -88,5 +92,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="debug"
     )

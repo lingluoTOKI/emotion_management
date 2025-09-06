@@ -343,17 +343,31 @@ class XFYunAIService:
             
             # 尝试解析JSON结果
             try:
+                # 先尝试直接解析JSON
                 emotion_result = json.loads(response_text)
                 return emotion_result
             except json.JSONDecodeError:
-                # 如果解析失败，返回基础分析结果
-                logger.warning("AI情绪分析返回格式异常，使用基础分析")
-                return {
-                    "dominant_emotion": "neutral",
-                    "intensity": 0.5,
-                    "confidence": 0.3,
-                    "error": "AI分析格式异常"
-                }
+                # 如果直接解析失败，尝试提取JSON部分
+                try:
+                    # 查找JSON格式的内容
+                    import re
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group()
+                        emotion_result = json.loads(json_str)
+                        return emotion_result
+                    else:
+                        # 如果没有找到JSON，进行基础文本分析
+                        return self._basic_emotion_analysis(response_text)
+                except:
+                    # 如果解析仍然失败，返回基础分析结果
+                    logger.warning("AI情绪分析返回格式异常，使用基础分析")
+                    return {
+                        "dominant_emotion": "neutral",
+                        "intensity": 0.5,
+                        "confidence": 0.3,
+                        "error": "AI分析格式异常"
+                    }
                 
         except Exception as e:
             logger.error(f"AI情绪分析失败: {str(e)}")
@@ -364,6 +378,47 @@ class XFYunAIService:
                 "error": str(e)
             }
     
+    def _basic_emotion_analysis(self, text: str) -> Dict[str, Any]:
+        """基础文本情绪分析"""
+        text_lower = text.lower()
+        
+        # 简单的关键词匹配
+        if any(word in text_lower for word in ['悲伤', '沮丧', '难过', '抑郁', '绝望']):
+            return {
+                "dominant_emotion": "sadness",
+                "intensity": 0.7,
+                "confidence": 0.6,
+                "source": "keyword_analysis"
+            }
+        elif any(word in text_lower for word in ['焦虑', '紧张', '担心', '恐惧', '害怕']):
+            return {
+                "dominant_emotion": "anxiety", 
+                "intensity": 0.6,
+                "confidence": 0.6,
+                "source": "keyword_analysis"
+            }
+        elif any(word in text_lower for word in ['愤怒', '生气', '愤慨', '恼火']):
+            return {
+                "dominant_emotion": "anger",
+                "intensity": 0.6,
+                "confidence": 0.6,
+                "source": "keyword_analysis"
+            }
+        elif any(word in text_lower for word in ['开心', '高兴', '快乐', '喜悦']):
+            return {
+                "dominant_emotion": "happiness",
+                "intensity": 0.6,
+                "confidence": 0.6,
+                "source": "keyword_analysis"
+            }
+        else:
+            return {
+                "dominant_emotion": "neutral",
+                "intensity": 0.5,
+                "confidence": 0.4,
+                "source": "default_analysis"
+            }
+
     async def test_connection(self) -> Dict[str, Any]:
         """测试AI服务连接"""
         
