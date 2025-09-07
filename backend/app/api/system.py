@@ -121,7 +121,8 @@ async def system_diagnostics(db: Session = Depends(get_db)):
     
     # 数据库统计
     try:
-        user_count = db.query(User).count()
+        from sqlalchemy import text
+        user_count = db.execute(text("SELECT COUNT(*) FROM users")).scalar()
         assessment_count = db.query(Assessment).count()
         consultation_count = db.query(Consultation).count()
         
@@ -247,7 +248,8 @@ async def test_database_connection(db: Session = Depends(get_db)):
         db_version = result.fetchone()[0]
         
         # 测试表访问
-        user_count = db.query(User).count()
+        from sqlalchemy import text
+        user_count = db.execute(text("SELECT COUNT(*) FROM users")).scalar()
         
         end_time = time.time()
         

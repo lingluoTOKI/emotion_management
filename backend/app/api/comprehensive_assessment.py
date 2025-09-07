@@ -18,7 +18,7 @@ from loguru import logger
 
 router = APIRouter()
 
-def get_student_user(current_user: User = Depends(get_current_user)):
+def get_student_user(current_user = Depends(get_current_user)):
     """确保当前用户是学生"""
     if current_user.role != UserRole.student:
         raise HTTPException(

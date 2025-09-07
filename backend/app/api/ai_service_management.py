@@ -52,7 +52,7 @@ async def get_ai_services_status():
 @router.post("/switch")
 async def switch_ai_service(
     service_name: str,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user)
 ):
     """切换主要AI服务（需要管理员权限）"""
     

@@ -15,6 +15,15 @@ from .exceptions import (
     ErrorMessages
 )
 
+def add_cors_headers(response: JSONResponse, request: Request) -> JSONResponse:
+    """为响应添加CORS头"""
+    # 简单粗暴：总是添加CORS头，允许所有来源
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Accept, Origin, User-Agent"
+    
+    return response
+
 
 async def emotion_management_exception_handler(
     request: Request, 
@@ -38,7 +47,7 @@ async def emotion_management_exception_handler(
     elif exc.error_code in ["DB_ERROR", "AI_ERROR", "RISK_ERROR"]:
         status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
     
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status_code,
         content={
             "success": False,
@@ -48,6 +57,7 @@ async def emotion_management_exception_handler(
             "path": str(request.url)
         }
     )
+    return add_cors_headers(response, request)
 
 
 async def http_exception_handler(
@@ -58,7 +68,7 @@ async def http_exception_handler(
     
     logger.warning(f"HTTP异常: {exc.status_code} - {exc.detail} | 路径: {request.url}")
     
-    return JSONResponse(
+    response = JSONResponse(
         status_code=exc.status_code,
         content={
             "success": False,
@@ -68,6 +78,7 @@ async def http_exception_handler(
             "path": str(request.url)
         }
     )
+    return add_cors_headers(response, request)
 
 
 async def general_exception_handler(
@@ -80,7 +91,7 @@ async def general_exception_handler(
     logger.error(f"未处理异常: {str(exc)} | 路径: {request.url}")
     logger.error(f"异常堆栈: {traceback.format_exc()}")
     
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "success": False,
@@ -93,6 +104,7 @@ async def general_exception_handler(
             "path": str(request.url)
         }
     )
+    return add_cors_headers(response, request)
 
 
 async def validation_exception_handler(
@@ -113,7 +125,7 @@ async def validation_exception_handler(
                 "type": error.get("type", "")
             })
         
-        return JSONResponse(
+        response = JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "success": False,
@@ -123,8 +135,9 @@ async def validation_exception_handler(
                 "path": str(request.url)
             }
         )
+        return add_cors_headers(response, request)
     
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "success": False,
@@ -134,6 +147,7 @@ async def validation_exception_handler(
             "path": str(request.url)
         }
     )
+    return add_cors_headers(response, request)
 
 
 def create_success_response(

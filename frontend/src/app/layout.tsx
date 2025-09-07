@@ -1,5 +1,6 @@
 import './globals.css'
 import type { Metadata } from 'next'
+import { BrowserExtensionHandler } from '@/components/BrowserExtensionHandler'
 
 export const metadata: Metadata = {
   title: '情绪管理系统 - 智能心理健康咨询平台',
@@ -13,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <BrowserExtensionHandler />
+        {children}
+      </body>
     </html>
   )
 }
