@@ -1,0 +1,7 @@
+{
+    "files.exclude": {
+        "**/backend/venv/**": true
+    },
+    "C_Cpp.errorSquiggles": "Disabled",
+    "C_Cpp.intelliSenseEngine": "Disabled"
+}

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>前端风险评估测试</title>
+</head>
+<body>
+    <h2>前端风险评估逻辑测试</h2>
+    <div id="results"></div>
+
+    <script>
+        // 模拟前端的风险评估逻辑
+        function generateDialogueStrategy(analysis, user_input) {
+            const { sentiment_score, emotion_intensity } = analysis;
+            
+            let strategy = {
+                risk_level: 'minimal'
+            };
+            
+            // 根据情绪强度和情感极性调整风险等级，同时考虑关键词匹配
+            let risk_score = 0
+            
+            // 1. 基于情绪强度和极性的基础评分
+            if (sentiment_score < -0.6 && emotion_intensity > 0.6) {
+                risk_score = 4 // 高风险
+            } else if (sentiment_score < -0.3 && emotion_intensity > 0.4) {
+                risk_score = 3 // 中等风险
+            } else if (sentiment_score > 0.3) {
+                risk_score = emotion_intensity > 0.7 ? 2 : 1 // 低风险或极低风险
+            } else if (sentiment_score >= -0.3 && sentiment_score <= 0.3) {
+                risk_score = 2 // 低风险
+            } else if (sentiment_score < -0.3) {
+                risk_score = 2 // 轻微负面情绪 = 低风险
+            }
+            
+            // 2. 检查社交困难关键词（与后端逻辑保持一致）
+            const socialIssueKeywords = ['说不上', '没什么话', '聊不来', '交流困难', '社交困难', '很难交流']
+            const hasSocialIssues = socialIssueKeywords.some(keyword => user_input.includes(keyword))
+            
+            if (hasSocialIssues) {
+                risk_score += 2 // 社交困难增加风险
+                console.log('🔍 检测到社交困难关键词，提升风险等级')
+            }
+            
+            // 3. 检查矛盾情绪（积极词汇 + 社交困难）
+            const positiveKeywords = ['快乐', '开心', '高兴', '愉快', '幸福', '满足']
+            const hasPositive = positiveKeywords.some(keyword => user_input.includes(keyword))
+            
+            if (hasPositive && hasSocialIssues) {
+                risk_score += 1 // 矛盾情绪模式
+                console.log('🔍 检测到矛盾情绪模式（积极+社交困难），进一步提升风险等级')
+            }
+            
+            // 4. 确定最终风险等级
+            if (risk_score >= 5) {
+                strategy.risk_level = 'high'
+            } else if (risk_score >= 3) {
+                strategy.risk_level = 'medium'
+            } else if (risk_score >= 2) {
+                strategy.risk_level = 'low'
+            } else {
+                strategy.risk_level = 'minimal'
+            }
+            
+            return { strategy, risk_score, hasSocialIssues, hasPositive };
+        }
+
+        // 测试案例
+        const testCases = [
+            {
+                description: "表达积极情绪",
+                user_input: "我很快乐",
+                analysis: { sentiment_score: 0.5, emotion_intensity: 0.8 },
+                expected: "low"
+            },
+            {
+                description: "社交困难",
+                user_input: "感觉和大家都说不上什么话",
+                analysis: { sentiment_score: -0.2, emotion_intensity: 0.3 },
+                expected: "medium"
+            },
+            {
+                description: "矛盾情绪：快乐但孤独",
+                user_input: "我很快乐，但是感觉和大家都说不上什么话",
+                analysis: { sentiment_score: 0.2, emotion_intensity: 0.5 },
+                expected: "high"
+            }
+        ];
+
+        let results = '<h3>测试结果：</h3>';
+        
+        testCases.forEach((testCase, index) => {
+            const result = generateDialogueStrategy(testCase.analysis, testCase.user_input);
+            const passed = result.strategy.risk_level === testCase.expected;
+            
+            results += `
+                <div style="margin: 10px 0; padding: 10px; border: 1px solid ${passed ? 'green' : 'red'};">
+                    <h4>测试 ${index + 1}: ${testCase.description}</h4>
+                    <p><strong>输入:</strong> "${testCase.user_input}"</p>
+                    <p><strong>预期风险:</strong> ${testCase.expected}</p>
+                    <p><strong>实际风险:</strong> ${result.strategy.risk_level}</p>
+                    <p><strong>风险分数:</strong> ${result.risk_score}</p>
+                    <p><strong>社交困难:</strong> ${result.hasSocialIssues}</p>
+                    <p><strong>积极情绪:</strong> ${result.hasPositive}</p>
+                    <p><strong>结果:</strong> <span style="color: ${passed ? 'green' : 'red'};">${passed ? '✅ 通过' : '❌ 失败'}</span></p>
+                </div>
+            `;
+        });
+
+        document.getElementById('results').innerHTML = results;
+    </script>
+</body>
+</html>

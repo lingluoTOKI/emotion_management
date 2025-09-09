@@ -1,0 +1,74 @@
+# IDE和编辑器历史文件
+.history/
+.vscode/
+.idea/
+
+# 依赖包
+node_modules/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 环境配置
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+database/config.env
+
+# 日志文件
+logs/
+*.log
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.temp
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 构建输出
+dist/
+build/
+.next/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Python相关
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# 上传文件
+uploads/
+backend/uploads/
+backend/static/
+
+# 数据库配置文件
+database/mysql_config.json
+
+# 临时JSON文件
+backend/临时文件/
+comprehensive_assessment_result_*.json
+frontend_integration_test_*.json
+
+# 包文件
+backend/whl/
+
+# Next.js
+.next/
+out/
+
+# 测试覆盖率
+coverage/
+
+# EasyBert模型文件
+backend/EasyBert/

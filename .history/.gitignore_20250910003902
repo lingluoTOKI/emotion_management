@@ -1,0 +1,45 @@
+# IDE和编辑器历史文件（只排除这些）
+.history/
+
+# 依赖包缓存
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# 虚拟环境
+venv/
+backend/venv/
+
+# 大模型文件（暂时排除加速上传）
+*.ckpt
+backend/EasyBert/**/saved_dict/
+
+# 敏感环境配置
+.env
+database/config.env
+database/mysql_config.json
+
+# 日志文件
+logs/*.log
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Python相关缓存
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Next.js构建输出
+.next/
+out/
+
+# 测试覆盖率
+coverage/
